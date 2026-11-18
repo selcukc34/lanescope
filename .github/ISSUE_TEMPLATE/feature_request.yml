@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something the viewer should show or do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lanescope is a read-only viewer: it never edits, saves or deploys process files, and makes no network requests. Requests that need either are out of scope.
+
+        **Do not attach customer TWX files.** Describe the case or use a minimal file without confidential content.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to see or understand, and what gets in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should the viewer show or do?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: input-type
+    attributes:
+      label: Input type
+      multiple: true
+      options:
+        - .bpmn (Bob output)
+        - .zip (Bob output with .xsd)
+        - .twx (IBM BAW export)
+        - Any
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you have considered or use today.

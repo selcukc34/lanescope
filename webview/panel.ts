@@ -1,0 +1,564 @@
+// Side panel: element details, XSD data types and warnings.
+// Everything from the model (scripts, mappings, conditions included) is set
+// as text (textContent / text nodes), never parsed as HTML, and never run.
+
+import type {
+  CalleeDetails,
+  CalleeStepDetails,
+  CoachDetails,
+  ElementDetails,
+  FlowDetails,
+  LaneDetails,
+  MappingDetails,
+  NodeDetails,
+  OutgoingFlowDetails,
+  ParameterDetails,
+  ProcessSummary,
+  RenderMessage,
+  ScriptDetails,
+  TimerDetails,
+  UserTaskDetails,
+  VariableDetails,
+} from '../src/views/protocol';
+import type { DataType } from '../src/model/model';
+import { clear, h } from './dom';
+import { catchesLabel, catchesText, insideSummary, isLinkedType, STEP_KIND_LABELS, stepNote } from './panelText';
+
+export type TabId = 'details' | 'data' | 'warnings';
+
+/** Types that have a row in the Data tab, and how to show one there. */
+interface RevealType {
+  known: ReadonlySet<string>;
+  reveal(name: string): void;
+}
+
+/** What the details of an activity need besides the activity itself. */
+interface NodeContext {
+  types: RevealType;
+  callees: Record<string, CalleeDetails>;
+  openCallee(calleeId: string): void;
+}
+
+/** Scripts longer than this are folded to their first lines. */
+const SCRIPT_FOLD_LINES = 20;
+
+export class SidePanel {
+  readonly element: HTMLElement;
+  private readonly tabs = new Map<TabId, { button: HTMLButtonElement; body: HTMLElement }>();
+  private active: TabId = 'details';
+  private data: RenderMessage | undefined;
+  private selectedId: string | undefined;
+
+  constructor(
+    private readonly onTabChange: (tab: TabId) => void,
+    /** The user asked to open a called service or linked process as a diagram. */
+    private readonly onOpenCallee: (calleeId: string) => void,
+  ) {
+    const tabBar = h('div', { class: 'tabs', role: 'tablist' });
+    const bodies = h('div', { class: 'tab-bodies' });
+    for (const [id, label] of [
+      ['details', 'Details'],
+      ['data', 'Data'],
+      ['warnings', 'Warnings'],
+    ] as Array<[TabId, string]>) {
+      const button = h('button', { class: 'tab', role: 'tab', type: 'button', id: `tab-${id}` }, label);
+      button.addEventListener('click', () => this.showTab(id));
+      const body = h('div', { class: 'tab-body', role: 'tabpanel', 'aria-labelledby': `tab-${id}` });
+      tabBar.append(button);
+      bodies.append(body);
+      this.tabs.set(id, { button, body });
+    }
+    this.element = h('aside', { class: 'panel' }, tabBar, bodies);
+    this.showTab('details');
+  }
+
+  get activeTab(): TabId {
+    return this.active;
+  }
+
+  showTab(id: TabId): void {
+    this.active = id;
+    for (const [tabId, { button, body }] of this.tabs) {
+      const on = tabId === id;
+      button.classList.toggle('active', on);
+      button.setAttribute('aria-selected', String(on));
+      body.hidden = !on;
+    }
+    this.onTabChange(id);
+  }
+
+  /**
+   * @param importWarnings problems bpmn-js reported while importing the diagram
+   * @param selection the element to select; when left out, the selection is kept while its id exists
+   */
+  setData(data: RenderMessage, importWarnings: string[] = [], selection?: { id: string | undefined }): void {
+    this.data = data;
+    this.renderData(data.dataTypes);
+    this.renderWarnings([...data.warnings, ...importWarnings]);
+    const id = selection ? selection.id : this.selectedId;
+    this.select(id && data.elements[id] ? id : undefined);
+  }
+
+  /** Id of the element whose details are shown; undefined for the process. */
+  get selection(): string | undefined {
+    return this.selectedId;
+  }
+
+  /** Shows the details of a diagram element, or of the process when undefined. */
+  select(id: string | undefined): void {
+    if (!this.data) return;
+    const details = id ? this.data.elements[id] : undefined;
+    this.selectedId = details ? id : undefined;
+    const body = this.tabs.get('details')!.body;
+    clear(body);
+    const types: RevealType = {
+      known: new Set(this.data.dataTypes.map((t) => t.name)),
+      reveal: (type) => this.revealType(type),
+    };
+    const ctx: NodeContext = { types, callees: this.data.callees ?? {}, openCallee: (id) => this.onOpenCallee(id) };
+    body.append(details ? renderElement(details, ctx) : renderProcess(this.data.process, types));
+  }
+
+  private revealType(name: string): void {
+    this.showTab('data');
+    const target = this.tabs.get('data')!.body.querySelector<HTMLElement>(`[data-type-name="${CSS.escape(name)}"]`);
+    if (target) {
+      target.scrollIntoView({ block: 'start' });
+      target.classList.remove('flash');
+      void target.offsetWidth;
+      target.classList.add('flash');
+    }
+  }
+
+  private renderData(types: DataType[]): void {
+    const body = this.tabs.get('data')!.body;
+    clear(body);
+    if (types.length === 0) {
+      body.append(h('p', { class: 'empty' }, 'No data types in the package.'));
+      return;
+    }
+    for (const t of types) {
+      const rows = t.fields.map((f) =>
+        h(
+          'tr',
+          {},
+          h('td', {}, f.name),
+          h('td', { class: 'mono' }, f.type),
+          h('td', { class: 'center' }, f.required ? 'yes' : 'no'),
+          h('td', { class: 'center' }, f.list ? 'yes' : 'no'),
+        ),
+      );
+      body.append(
+        h(
+          'section',
+          { class: 'datatype', 'data-type-name': t.name },
+          h('h3', {}, t.name),
+          t.namespace ? h('div', { class: 'muted mono' }, t.namespace) : null,
+          t.documentation ? h('p', { class: 'doc' }, t.documentation) : null,
+          t.fields.length === 0
+            ? h('p', { class: 'empty' }, 'No fields.')
+            : h(
+                'table',
+                {},
+                h(
+                  'thead',
+                  {},
+                  h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Type'), h('th', {}, 'Required'), h('th', {}, 'List')),
+                ),
+                h('tbody', {}, ...rows),
+              ),
+        ),
+      );
+    }
+  }
+
+  private renderWarnings(warnings: string[]): void {
+    const { button, body } = this.tabs.get('warnings')!;
+    button.textContent = `Warnings (${warnings.length})`;
+    button.classList.toggle('has-warnings', warnings.length > 0);
+    clear(body);
+    body.append(
+      warnings.length === 0
+        ? h('p', { class: 'empty' }, 'No warnings.')
+        : h('ul', { class: 'warnings' }, ...warnings.map((w) => h('li', {}, w))),
+    );
+  }
+}
+
+function renderProcess(p: ProcessSummary, revealType: RevealType): HTMLElement {
+  return h(
+    'div',
+    {},
+    h('h2', {}, p.name || p.id),
+    p.kind !== 'Process' ? h('div', { class: 'subtitle muted' }, p.kind) : null,
+    h('p', { class: 'hint' }, 'Click a node or flow to see its details.'),
+    fields([
+      ['Kind', p.kind],
+      ['Source', p.sourceFile],
+      ['Process app', p.app],
+      ['Exporter', p.exporter],
+      ['Id', p.originalId ?? p.id, true],
+    ]),
+    p.documentation ? section('Documentation', h('p', { class: 'doc' }, p.documentation)) : null,
+    p.inputs && p.inputs.length > 0 ? section('Inputs', parameters(p.inputs, revealType)) : null,
+    p.outputs && p.outputs.length > 0 ? section('Outputs', parameters(p.outputs, revealType)) : null,
+    p.variables && p.variables.length > 0 ? section('Variables', variablesTable(p.variables, revealType)) : null,
+    p.toolkits && p.toolkits.length > 0
+      ? section('Toolkits', h('ul', { class: 'params' }, ...p.toolkits.map((t) => h('li', {}, t))))
+      : null,
+  );
+}
+
+function renderElement(d: ElementDetails, ctx: NodeContext): HTMLElement {
+  if (d.kind === 'node') return renderNode(d, ctx);
+  if (d.kind === 'flow') return renderFlow(d);
+  return renderLane(d);
+}
+
+function renderNode(d: NodeDetails, ctx: NodeContext): HTMLElement {
+  const revealType = ctx.types;
+  const callee = d.callee !== undefined ? ctx.callees[d.callee] : undefined;
+  let open: HTMLElement | null = null;
+  if (d.openCallee !== undefined) {
+    const calleeId = d.openCallee;
+    const isProcess = d.openProcessId !== undefined;
+    const button = h(
+      'button',
+      { class: 'button', type: 'button', title: isProcess ? 'Open the called process (or double-click the activity)' : 'Open the called service as a diagram (or double-click the activity)' },
+      isProcess ? 'Open process' : 'Open diagram',
+    );
+    button.addEventListener('click', () => ctx.openCallee(calleeId));
+    open = button;
+  } else if (d.openUnavailable !== undefined) {
+    open = h('span', { class: 'muted', title: 'This call cannot be opened as a diagram' }, d.openUnavailable);
+  }
+  return h(
+    'div',
+    {},
+    h('h2', {}, d.name || '(unnamed)'),
+    fields([
+      ['BPMN kind', d.bpmnKind],
+      ['Original type', d.originalType, true],
+      ['Service type', d.serviceType],
+      ['Calls', d.calls],
+      ['Event', d.eventType],
+      ['Attached to', d.boundary?.attachedTo],
+      ['Catches', d.boundary ? catchesText(d.boundary) : undefined],
+      ['Service', d.rest?.service],
+      ['Operation', d.rest?.operation],
+      ['Lane', d.lane],
+      // A user task shows its performer under Assignment.
+      ['Performer', d.userTask ? undefined : d.performer],
+      ['Id', d.originalId ?? d.id, true],
+    ]),
+    open ? h('p', { class: 'actions' }, open) : null,
+    d.documentation ? section('Documentation', h('p', { class: 'doc' }, d.documentation)) : null,
+    d.script ? scriptSection(d.script) : null,
+    d.coach ? section('Controls', controlsTable(d.coach)) : null,
+    d.userTask ? assignmentSection(d.userTask) : null,
+    d.timer ? timerSection(d.timer) : null,
+    d.outgoing ? section('Outgoing conditions', outgoingTable(d.outgoing)) : null,
+    // A call's mapping lists every parameter of the signature, so it replaces the plain list.
+    d.inputMappings
+      ? section('Input mapping', inputMappingTable(d.inputMappings, revealType))
+      : d.inputs.length > 0
+        ? section('Inputs', parameters(d.inputs, revealType))
+        : null,
+    d.outputMappings
+      ? section('Output mapping', outputMappingTable(d.outputMappings))
+      : d.outputs.length > 0
+        ? section('Outputs', parameters(d.outputs, revealType))
+        : null,
+    callee ? insideSection(callee, revealType) : null,
+  );
+}
+
+/** "Inside <service>": the steps, data and coaches of the called service, folded by default. */
+function insideSection(c: CalleeDetails, revealType: RevealType): HTMLElement {
+  const steps =
+    c.steps.length === 0
+      ? h('p', { class: 'empty' }, 'No steps between start and end.')
+      : h('ol', { class: 'steps' }, ...c.steps.map((s) => stepItem(s, revealType)));
+  return h(
+    'details',
+    { class: 'inside' },
+    h('summary', {}, h('span', { class: 'inside-title' }, `Inside ${c.name}`), h('span', { class: 'muted' }, insideSummary(c))),
+    h('section', {}, h('h4', {}, 'Steps'), steps),
+    c.inputs && c.inputs.length > 0 ? subsection('Inputs', parameters(c.inputs, revealType)) : null,
+    c.outputs && c.outputs.length > 0 ? subsection('Outputs', parameters(c.outputs, revealType)) : null,
+    c.variables && c.variables.length > 0 ? subsection('Variables', variablesTable(c.variables, revealType)) : null,
+    c.coaches && c.coaches.length > 0 ? h('section', {}, h('h4', {}, 'Coaches'), ...c.coaches.map(coachBlock)) : null,
+  );
+}
+
+function stepItem(s: CalleeStepDetails, revealType: RevealType): HTMLElement {
+  const note = stepNote(s);
+  const boundaries = (s.errorBoundaries ?? []).map((b) => {
+    const catches = catchesLabel(b);
+    return h(
+      'div',
+      { class: 'step-line' },
+      h('span', { class: 'badge kind' }, 'Error boundary'),
+      h('span', {}, b.name || '(unnamed)'),
+      catches ? h('span', { class: 'muted' }, ` · ${catches}`) : null,
+      b.to !== undefined ? h('span', { class: 'muted' }, ` · to ${b.to}`) : null,
+    );
+  });
+  return h(
+    'li',
+    { class: 'step' },
+    h(
+      'div',
+      { class: 'step-line' },
+      h('span', { class: 'badge kind' }, STEP_KIND_LABELS[s.kind]),
+      h('span', {}, s.name || '(unnamed)'),
+      note ? h('span', { class: 'muted' }, ` · ${note}`) : null,
+    ),
+    ...boundaries,
+    s.calls ? fields([['Calls', s.calls]]) : null,
+    s.rest
+      ? fields([
+          ['Service', s.rest.service],
+          ['Operation', s.rest.operation],
+        ])
+      : null,
+    s.script ? foldedScript(s.script) : null,
+    s.conditions ? conditionsTable(s.conditions) : null,
+    s.inputMappings ? subsection('Input mapping', inputMappingTable(s.inputMappings, revealType)) : null,
+    s.outputMappings ? subsection('Output mapping', outputMappingTable(s.outputMappings)) : null,
+  );
+}
+
+/** A step's script, folded by default; the same block as a script task's. */
+function foldedScript(s: ScriptDetails): HTMLElement {
+  if (s.hidden) return h('p', { class: 'hint' }, 'Script content hidden by the lanescope.showScripts setting.');
+  const lines = `${s.lineCount} ${s.lineCount === 1 ? 'line' : 'lines'}`;
+  return h('details', { class: 'fold' }, h('summary', {}, `Script · ${lines}`), scriptSection(s));
+}
+
+function conditionsTable(rows: NonNullable<CalleeStepDetails['conditions']>): HTMLElement {
+  return table(
+    ['To', 'Condition', 'Default'],
+    rows.map((c) => [
+      h('td', {}, c.to),
+      c.condition !== undefined ? h('td', {}, h('code', { class: 'expr' }, c.condition)) : h('td', { class: 'muted' }, 'no condition'),
+      h('td', { class: 'center' }, c.isDefault ? 'yes' : ''),
+    ]),
+  );
+}
+
+function coachBlock(c: CoachDetails): HTMLElement {
+  return h(
+    'div',
+    { class: 'coach' },
+    h('div', { class: 'step-line' }, h('span', { class: 'badge kind' }, 'Coach'), h('span', {}, c.name || '(unnamed)')),
+    controlsTable(c),
+  );
+}
+
+/** Control · Type · Binding of a coach. */
+function controlsTable(c: CoachDetails): HTMLElement {
+  if (c.controls.length === 0) return h('p', { class: 'empty' }, 'No controls.');
+  return table(
+    ['Control', 'Type', 'Binding'],
+    c.controls.map((k) => [
+      h('td', {}, k.label ?? k.id),
+      h('td', {}, k.type ?? ''),
+      k.binding !== undefined ? h('td', {}, h('code', { class: 'expr' }, k.binding)) : h('td', {}),
+    ]),
+  );
+}
+
+function subsection(title: string, content: Node): HTMLElement {
+  return h('section', {}, h('h4', {}, title), content);
+}
+
+function scriptSection(s: ScriptDetails): HTMLElement {
+  if (s.hidden) {
+    return section('Script', h('p', { class: 'hint' }, 'Script content hidden by the lanescope.showScripts setting.'));
+  }
+  const lines = s.text.split('\n');
+  const folded = lines.length > SCRIPT_FOLD_LINES;
+  const pre = h('pre', { class: 'code script' });
+  pre.textContent = folded ? lines.slice(0, SCRIPT_FOLD_LINES).join('\n') : s.text;
+
+  const copy = h('button', { class: 'button small', type: 'button', title: 'Copy the script to the clipboard' }, 'Copy');
+  let reset: ReturnType<typeof setTimeout> | undefined;
+  copy.addEventListener('click', () => {
+    const done = (label: string) => {
+      copy.textContent = label;
+      clearTimeout(reset);
+      reset = setTimeout(() => (copy.textContent = 'Copy'), 1500);
+    };
+    // Only on a click: the clipboard is never read and never written otherwise.
+    navigator.clipboard.writeText(s.text).then(
+      () => done('Copied'),
+      () => done('Copy failed'),
+    );
+  });
+
+  let expand: HTMLButtonElement | null = null;
+  if (folded) {
+    const button = h('button', { class: 'link', type: 'button' }, `Show all ${s.lineCount} lines`);
+    button.addEventListener('click', () => {
+      pre.textContent = s.text;
+      button.remove();
+    });
+    expand = button;
+  }
+
+  const meta = `${s.lineCount} ${s.lineCount === 1 ? 'line' : 'lines'}${s.language ? ` · ${s.language}` : ''}`;
+  return h(
+    'section',
+    {},
+    h('div', { class: 'section-head' }, h('h3', {}, 'Script'), h('span', { class: 'muted' }, meta), copy),
+    pre,
+    expand,
+  );
+}
+
+function assignmentSection(u: UserTaskDetails): HTMLElement | null {
+  const dl = fields([
+    ['Assignment type', u.assignment],
+    ['Lane', u.lane],
+    ['Performer', u.performer],
+    ['Priority', u.priority],
+    ['Due date', u.dueDate],
+    ['Subject', u.subject, true],
+  ]);
+  return dl.childElementCount > 0 ? section('Assignment', dl) : null;
+}
+
+function timerSection(t: TimerDetails): HTMLElement {
+  const flag = (v: boolean | undefined) => (v === undefined ? undefined : v ? 'yes' : 'no');
+  return section(
+    'Timer',
+    fields([
+      ['Duration', t.unit ? `${t.duration} ${t.unit}` : t.duration, !/^\d+(\.\d+)?$/.test(t.duration)],
+      ['Interrupting', flag(t.interrupting)],
+      ['Repeating', flag(t.repeating)],
+    ]),
+  );
+}
+
+function outgoingTable(flows: OutgoingFlowDetails[]): HTMLElement {
+  return table(
+    ['To', 'Condition', 'Default'],
+    flows.map((f) => [
+      h('td', {}, f.target),
+      f.condition !== undefined ? h('td', {}, h('code', { class: 'expr' }, f.condition)) : h('td', { class: 'muted' }, '—'),
+      h('td', { class: 'center' }, f.isDefault ? 'yes' : ''),
+    ]),
+  );
+}
+
+function inputMappingTable(rows: MappingDetails[], revealType: RevealType): HTMLElement {
+  return table(
+    ['Parameter', 'Type', 'Value'],
+    rows.map((m) => [h('td', {}, m.parameter), h('td', {}, typeLink(m.type, m.isCollection, revealType)), mappedValue(m)]),
+  );
+}
+
+function outputMappingTable(rows: MappingDetails[]): HTMLElement {
+  return table(
+    ['Parameter', 'Target'],
+    rows.map((m) => [h('td', {}, m.parameter), mappedValue(m)]),
+  );
+}
+
+function mappedValue(m: MappingDetails): HTMLElement {
+  if (!m.mapped) return h('td', { class: 'muted' }, 'not mapped');
+  const value = m.value ?? '';
+  return h(
+    'td',
+    {},
+    value === '' ? h('span', { class: 'muted' }, m.literal ? '(empty text)' : '(empty)') : h('code', { class: 'expr' }, value),
+    m.literal ? h('span', { class: 'badge', title: 'A literal value, not an expression' }, 'literal') : null,
+  );
+}
+
+function variablesTable(vars: VariableDetails[], revealType: RevealType): HTMLElement {
+  return table(
+    ['Name', 'Type', 'List', 'Default', 'Tracked'],
+    vars.map((v) => [
+      h('td', {}, v.name),
+      h('td', {}, typeLink(v.type, false, revealType)),
+      h('td', { class: 'center' }, v.isCollection ? 'yes' : 'no'),
+      v.defaultValue !== undefined ? h('td', {}, h('code', { class: 'expr' }, v.defaultValue)) : h('td', {}),
+      h('td', { class: 'center' }, v.tracked ? 'yes' : 'no'),
+    ]),
+  );
+}
+
+function table(headers: string[], rows: HTMLElement[][]): HTMLElement {
+  return h(
+    'table',
+    { class: 'grid' },
+    h('thead', {}, h('tr', {}, ...headers.map((t) => h('th', {}, t)))),
+    h('tbody', {}, ...rows.map((cells) => h('tr', {}, ...cells))),
+  );
+}
+
+/** A type name; a link that opens the type in the Data tab when the tab has it. */
+function typeLink(type: string | undefined, isCollection: boolean, revealType: RevealType): Node | null {
+  if (!type) return isCollection ? h('span', { class: 'muted' }, 'list') : null;
+  const text = isCollection ? `${type}[]` : type;
+  if (!isLinkedType(type, revealType.known)) return h('span', { class: 'mono' }, text);
+  const link = h('button', { class: 'link mono', type: 'button', title: 'Show in Data tab' }, text);
+  link.addEventListener('click', () => revealType.reveal(type));
+  return link;
+}
+
+function renderFlow(d: FlowDetails): HTMLElement {
+  return h(
+    'div',
+    {},
+    h('h2', {}, d.name || '(unnamed flow)'),
+    d.labelHidden ? h('p', { class: 'hint' }, 'Generated label, hidden in the diagram.') : null,
+    fields([
+      ['Kind', 'Sequence flow'],
+      ['From', d.source],
+      ['To', d.target],
+      ['Default flow', d.isDefault ? 'yes' : 'no'],
+      ['Id', d.originalId ?? d.id, true],
+    ]),
+    d.condition !== undefined ? section('Condition', h('pre', { class: 'code' }, d.condition)) : null,
+  );
+}
+
+function renderLane(d: LaneDetails): HTMLElement {
+  return h(
+    'div',
+    {},
+    h('h2', {}, d.name || '(unnamed lane)'),
+    fields([
+      ['Kind', 'Lane'],
+      ['Nodes', String(d.nodeCount)],
+      ['Id', d.originalId ?? d.id, true],
+    ]),
+  );
+}
+
+function fields(rows: Array<[string, string | undefined, boolean?]>): HTMLElement {
+  const dl = h('dl', { class: 'fields' });
+  for (const [label, value, mono] of rows) {
+    if (value === undefined || value === '') continue;
+    dl.append(h('dt', {}, label), h('dd', mono ? { class: 'mono' } : {}, value));
+  }
+  return dl;
+}
+
+function section(title: string, content: Node): HTMLElement {
+  return h('section', {}, h('h3', {}, title), content);
+}
+
+function parameters(params: ParameterDetails[], revealType: RevealType): HTMLElement {
+  return h(
+    'ul',
+    { class: 'params' },
+    ...params.map((p) => {
+      const type = typeLink(p.type, p.isCollection, revealType);
+      return h('li', {}, h('span', {}, p.name), type ? ' : ' : null, type);
+    }),
+  );
+}

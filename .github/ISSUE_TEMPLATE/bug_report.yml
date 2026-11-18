@@ -1,0 +1,86 @@
+name: Bug report
+description: Something is drawn wrong, missing, or the viewer fails to open a file.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Do not attach customer TWX files** or any other export that holds customer data, endpoints or user names. Issues are public.
+        > If a file is needed, build a minimal one without confidential content, or describe its structure (element types, names changed).
+
+        For security problems, use [private vulnerability reporting](https://github.com/selcukc34/lanescope/security) instead.
+
+  - type: input
+    id: lanescope-version
+    attributes:
+      label: Lanescope version
+      description: Shown in the Extensions view.
+      placeholder: e.g. 0.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: ide-version
+    attributes:
+      label: IBM Bob / VS Code version
+      description: Help → About. Name the IDE and its version, and the VS Code version it is based on.
+      placeholder: e.g. IBM Bob 2.2.2 (VS Code 1.126) or VS Code 1.95
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. macOS 15, Windows 11, Ubuntu 24.04
+
+  - type: dropdown
+    id: input-type
+    attributes:
+      label: Input type
+      options:
+        - .bpmn (Bob output)
+        - .zip (Bob output with .xsd)
+        - .twx (IBM BAW export)
+        - Not related to a specific input
+    validations:
+      required: true
+
+  - type: input
+    id: baw-version
+    attributes:
+      label: BAW version (for .twx)
+      placeholder: e.g. 8.6.6
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a .twx export with a service flow that ...
+        2. Click ...
+        3. See ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages
+      description: The error banner text, or output from Help → Toggle Developer Tools → Console. Remove any customer names or paths first.
+      render: text
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have not attached customer files, and removed customer names, endpoints and personal paths from this report.
+          required: true

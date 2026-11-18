@@ -1,0 +1,13 @@
+# Ship only the bundled extension, its icon and the docs.
+# Everything else (src, webview sources, tests, fixtures, node_modules,
+# configs, source maps) stays out of the .vsix.
+**
+!dist/**
+!media/**
+!README.md
+!CHANGELOG.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!package.json
+**/*.map
+**/.DS_Store

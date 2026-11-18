@@ -1,0 +1,119 @@
+{
+  "name": "lanescope",
+  "displayName": "Lanescope",
+  "description": "Read-only BPMN viewer for IBM Business Automation Workflow (.twx) and IBM Bob (.bpmn) process files.",
+  "keywords": [
+    "bpmn",
+    "baw",
+    "ibm baw",
+    "twx",
+    "bob",
+    "business automation workflow",
+    "process viewer"
+  ],
+  "version": "0.3.0",
+  "preview": true,
+  "publisher": "selcukc",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/selcukc34/lanescope.git"
+  },
+  "homepage": "https://github.com/selcukc34/lanescope#readme",
+  "bugs": {
+    "url": "https://github.com/selcukc34/lanescope/issues"
+  },
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1E5A52",
+    "theme": "dark"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "lanescope.processViewer",
+        "displayName": "Lanescope",
+        "selector": [
+          {
+            "filenamePattern": "*.bpmn"
+          },
+          {
+            "filenamePattern": "*.zip"
+          },
+          {
+            "filenamePattern": "*.twx"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "Lanescope",
+      "properties": {
+        "lanescope.showScripts": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the code of script tasks in the details panel. When off, script text is not sent to the diagram view at all."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "lanescope.open",
+        "title": "Lanescope: Open"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "lanescope.open",
+          "when": "resourceExtname == .zip || resourceExtname == .bpmn || resourceExtname == .twx",
+          "group": "navigation@99"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lanescope.open"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "npm run typecheck && node esbuild.mjs",
+    "build:prod": "npm run typecheck && node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p . --noEmit && tsc -p webview --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "vscode:prepublish": "npm run build:prod",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "bpmn-js": "18.31.1",
+    "bpmn-moddle": "^10.3.1",
+    "elkjs": "^0.12.1",
+    "fast-xml-parser": "^5.12.1",
+    "jszip": "^3.10.2"
+  }
+}

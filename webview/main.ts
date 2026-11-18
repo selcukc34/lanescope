@@ -1,0 +1,436 @@
+// Webview entry point: a toolbar, the bpmn-js NavigatedViewer and the side panel.
+// Runs in the browser sandbox under a strict CSP: no network requests, and
+// all text from the model is set with textContent.
+
+import 'bpmn-js/dist/assets/diagram-js.css';
+import 'bpmn-js/dist/assets/bpmn-js.css';
+import './main.css';
+
+import NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
+import { isPathPrefix, pathKey } from '../src/views/navigation';
+import type {
+  ErrorMessage,
+  HostMessage,
+  RefreshErrorMessage,
+  RenderMessage,
+  ViewOptions,
+  WebviewMessage,
+} from '../src/views/protocol';
+import { clear, h } from './dom';
+import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
+import { SidePanel, type TabId } from './panel';
+
+interface VsCodeApi {
+  postMessage(message: WebviewMessage): void;
+  getState(): unknown;
+  setState(state: unknown): void;
+}
+declare function acquireVsCodeApi(): VsCodeApi;
+
+interface PersistedState {
+  tab?: TabId;
+}
+
+interface Viewbox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface Canvas {
+  zoom(level?: number | 'fit-viewport', center?: { x: number; y: number }): number;
+  viewbox(box?: Viewbox): Viewbox & { scale: number };
+  resized(): void;
+}
+
+interface EventBus {
+  on(event: string, callback: (e: { element?: { id: string; type: string } }) => void): void;
+}
+
+/** What is brought back when the user returns to a level: the view and the selection. */
+interface LevelState {
+  path: string[];
+  viewbox: Viewbox;
+  selection: string | undefined;
+}
+
+const vscode = acquireVsCodeApi();
+const state = (vscode.getState() as PersistedState | undefined) ?? {};
+
+// ---- Layout -------------------------------------------------------------
+
+const fitButton = button('Fit', 'Fit the diagram to the window (0)');
+const zoomInButton = button('+', 'Zoom in (+)');
+const zoomOutButton = button('−', 'Zoom out (-)');
+const labelsToggle = toggle('Hide generated flow labels', 'Hide "To <target>" flow names; condition and default flows keep their label');
+const lanesToggle = toggle('Show empty lanes', 'Draw lanes that contain no nodes (the Warnings tab lists them)');
+const title = h('span', { class: 'title' });
+// Shown only when the package holds more than one process (a TWX with several BPDs).
+const processSelect = h('select', {
+  class: 'process-select',
+  title: 'Process to show',
+  'aria-label': 'Process to show',
+  hidden: '',
+});
+const updated = h('span', { class: 'updated muted', hidden: '' });
+
+const toolbar = h(
+  'div',
+  { class: 'toolbar', role: 'toolbar' },
+  title,
+  processSelect,
+  updated,
+  h('span', { class: 'spacer' }),
+  labelsToggle.label,
+  lanesToggle.label,
+  h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
+);
+
+const canvasHost = h('div', { class: 'canvas', tabindex: '0' });
+const overlay = h('div', { class: 'overlay' }, h('p', { class: 'muted' }, 'Loading…'));
+const stage = h('div', { class: 'stage' }, canvasHost, overlay);
+
+// Breadcrumb of the open levels; shown once a call has been opened.
+const backButton = button('Back', 'Back to the calling diagram (Escape)');
+const crumbList = h('ol', {});
+const crumbNote = h('span', { class: 'note muted', role: 'status', hidden: '' });
+const crumbs = h(
+  'nav',
+  { class: 'crumbs', 'aria-label': 'Open diagrams', hidden: '' },
+  backButton,
+  crumbList,
+  crumbNote,
+);
+backButton.addEventListener('click', goBack);
+
+// Refresh failures: shown above the last good diagram until the next render.
+const bannerTitle = h('strong', {});
+const bannerText = h('span', {});
+const bannerClose = h('button', { type: 'button', class: 'banner-close', title: 'Dismiss', 'aria-label': 'Dismiss' }, '×');
+const banner = h(
+  'div',
+  { class: 'banner', role: 'alert', hidden: '' },
+  h('div', { class: 'banner-text' }, bannerTitle, bannerText),
+  bannerClose,
+);
+bannerClose.addEventListener('click', hideBanner);
+
+const panel = new SidePanel(
+  (tab) => {
+    state.tab = tab;
+    vscode.setState(state);
+  },
+  (calleeId) => openCallee(calleeId),
+);
+if (state.tab) panel.showTab(state.tab);
+
+const root = document.getElementById('root')!;
+root.append(toolbar, crumbs, banner, h('div', { class: 'main' }, stage, panel.element));
+
+// ---- Viewer -------------------------------------------------------------
+
+let viewer = createViewer();
+let current: RenderMessage | undefined;
+/** Increases with every import; results of older imports are dropped. */
+let importGeneration = 0;
+/** The view and selection of each level above the shown one, by path key. */
+const levelStates = new Map<string, LevelState>();
+
+function createViewer(): NavigatedViewer {
+  const style = getComputedStyle(document.body);
+  const color = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  const v = new NavigatedViewer({
+    container: canvasHost,
+    keyboard: { bind: false },
+    bpmnRenderer: {
+      defaultFillColor: color('--vscode-editor-background', '#ffffff'),
+      defaultStrokeColor: color('--vscode-editor-foreground', '#000000'),
+      defaultLabelColor: color('--vscode-editor-foreground', '#000000'),
+    },
+  });
+  const eventBus = v.get<EventBus>('eventBus');
+  eventBus.on('element.click', (e) => {
+    const el = e.element;
+    // Clicking the pool or empty canvas shows the process details.
+    panel.select(el && el.type !== 'bpmn:Participant' && el.type !== 'bpmn:Process' ? el.id : undefined);
+  });
+  // Double-clicking a call opens what it calls, like the "Open diagram" button.
+  eventBus.on('element.dblclick', (e) => {
+    const details = e.element ? current?.elements[e.element.id] : undefined;
+    if (details?.kind === 'node' && details.openCallee !== undefined) openCallee(details.openCallee);
+  });
+  return v;
+}
+
+function canvas(): Canvas {
+  return viewer.get<Canvas>('canvas');
+}
+
+async function render(msg: RenderMessage): Promise<void> {
+  const generation = ++importGeneration;
+  const path = msg.path.map((l) => l.id);
+  const sameLevel = current !== undefined && pathKey(currentPath()) === pathKey(path);
+  // Leaving a level: remember its view and selection for the way back.
+  if (current && !sameLevel) {
+    const box = canvas().viewbox();
+    const from = currentPath();
+    levelStates.set(pathKey(from), {
+      path: from,
+      viewbox: { x: box.x, y: box.y, width: box.width, height: box.height },
+      selection: panel.selection,
+    });
+  }
+  // Only the levels above the new one can be returned to (another chosen process starts afresh).
+  for (const [key, saved] of [...levelStates]) {
+    if (!isPathPrefix(saved.path, path)) levelStates.delete(key);
+  }
+  const restored = !sameLevel ? levelStates.get(pathKey(path)) : undefined;
+  levelStates.delete(pathKey(path));
+  const previous = current && msg.preserveView ? canvas().viewbox() : restored?.viewbox;
+  current = msg;
+  // A new render replaces any refresh error; one sent after it shows again.
+  hideBanner();
+  title.textContent = msg.process.name || msg.process.id;
+  title.title = msg.process.sourceFile;
+  showProcessChoices(msg);
+  showCrumbs(msg);
+  labelsToggle.input.checked = msg.options.hideGeneratedFlowLabels;
+  lanesToggle.input.checked = !msg.options.hideEmptyLanes;
+  setControlsEnabled(true);
+
+  // Any failure below must end on the error screen, never on "Loading…".
+  try {
+    const result = await viewer.importXML(msg.xml);
+    if (generation !== importGeneration) return;
+    // Elements bpmn-js could not read are left out of the drawing: say so.
+    // The typings say string[]; at run time bpmn-js gives Error objects.
+    const importWarnings = ((result.warnings ?? []) as unknown[]).map((w) => {
+      const text = w instanceof Error ? w.message : String((w as { message?: unknown })?.message ?? w);
+      return `Diagram: ${text.split('\n')[0]}`;
+    });
+    if (previous) {
+      canvas().viewbox({ x: previous.x, y: previous.y, width: previous.width, height: previous.height });
+    } else {
+      canvas().zoom('fit-viewport');
+    }
+    // On the same level the selected element is kept while its id exists; another level starts
+    // with the selection it had when it was left, or none.
+    panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });
+    overlay.hidden = true;
+    showUpdated(msg.loadedAt);
+  } catch (err) {
+    if (generation !== importGeneration) return;
+    showError({
+      type: 'error',
+      title: 'Cannot draw the diagram',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function showError(msg: ErrorMessage): void {
+  current = undefined;
+  setControlsEnabled(false);
+  clear(overlay);
+  overlay.append(
+    h('div', { class: 'error' }, h('h2', {}, msg.title), h('p', {}, msg.message)),
+  );
+  overlay.hidden = false;
+}
+
+function showBanner(msg: RefreshErrorMessage): void {
+  // Without a diagram there is nothing to keep: use the full error screen.
+  if (!current) {
+    showError({ type: 'error', title: msg.title, message: msg.message });
+    return;
+  }
+  bannerTitle.textContent = msg.title;
+  bannerText.textContent = msg.message;
+  banner.hidden = false;
+}
+
+function hideBanner(): void {
+  banner.hidden = true;
+}
+
+function showUpdated(loadedAt: number): void {
+  const at = new Date(loadedAt);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  updated.textContent = `Updated ${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+  updated.title = `Last read from disk: ${at.toLocaleString()}`;
+  updated.hidden = false;
+}
+
+function showProcessChoices(msg: RenderMessage): void {
+  const many = msg.processes.length > 1;
+  processSelect.hidden = !many;
+  // With a selector the title would repeat the selected name.
+  title.hidden = many;
+  clear(processSelect);
+  if (!many) return;
+  for (const p of msg.processes) {
+    const option = h('option', { value: p.id }, p.name);
+    option.selected = p.id === msg.rootProcessId;
+    processSelect.append(option);
+  }
+  processSelect.title = `Process to show (${msg.processes.length} in ${msg.process.sourceFile})`;
+}
+
+function setControlsEnabled(enabled: boolean): void {
+  for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, processSelect, backButton]) {
+    control.disabled = !enabled;
+  }
+  for (const crumb of crumbList.querySelectorAll('button')) crumb.disabled = !enabled;
+}
+
+// ---- Navigation ---------------------------------------------------------
+
+/** Level ids of the shown path, the chosen process first. */
+function currentPath(): string[] {
+  return current ? current.path.map((l) => l.id) : [];
+}
+
+/** Opens a called service or linked process one level below the shown one. */
+function openCallee(calleeId: string): void {
+  if (!current) return;
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'openCallee', calleeId, path: currentPath() });
+}
+
+/** Back to the level at `index` of the path (0 is the chosen process). */
+function goToLevel(index: number): void {
+  const path = currentPath();
+  if (index < 0 || index >= path.length - 1) return;
+  setControlsEnabled(false);
+  // Opening a level from the one above it: the host draws it, the saved view comes back here.
+  vscode.postMessage({ type: 'openCallee', calleeId: path[index], path: path.slice(0, index) });
+}
+
+function goBack(): void {
+  goToLevel(currentPath().length - 2);
+}
+
+function showCrumbs(msg: RenderMessage): void {
+  crumbs.hidden = msg.path.length < 2 && !msg.note;
+  backButton.hidden = msg.path.length < 2;
+  clear(crumbList);
+  msg.path.forEach((level, index) => {
+    const last = index === msg.path.length - 1;
+    const tooltip = `${level.kind}: ${level.name}`;
+    if (last) {
+      crumbList.append(h('li', { 'aria-current': 'page', title: tooltip }, level.name));
+      return;
+    }
+    const link = h('button', { class: 'link', type: 'button', title: `Back to ${tooltip}` }, level.name);
+    link.addEventListener('click', () => goToLevel(index));
+    crumbList.append(h('li', {}, link));
+  });
+  crumbNote.textContent = msg.note ?? '';
+  crumbNote.hidden = !msg.note;
+}
+
+// ---- Controls -----------------------------------------------------------
+
+function zoomBy(factor: number): void {
+  const c = canvas();
+  const box = c.viewbox();
+  c.zoom(Math.min(4, Math.max(0.2, box.scale * factor)), {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  });
+}
+
+fitButton.addEventListener('click', () => canvas().zoom('fit-viewport'));
+zoomInButton.addEventListener('click', () => zoomBy(1.2));
+zoomOutButton.addEventListener('click', () => zoomBy(1 / 1.2));
+
+function sendOptions(): void {
+  const options: ViewOptions = {
+    hideGeneratedFlowLabels: labelsToggle.input.checked,
+    hideEmptyLanes: !lanesToggle.input.checked,
+  };
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'setOptions', options });
+}
+labelsToggle.input.addEventListener('change', sendOptions);
+processSelect.addEventListener('change', () => {
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'selectProcess', processId: processSelect.value });
+});
+lanesToggle.input.addEventListener('change', sendOptions);
+
+canvasHost.addEventListener('keydown', (e) => {
+  if (!current) return;
+  if (e.key === '+' || e.key === '=') zoomBy(1.2);
+  else if (e.key === '-') zoomBy(1 / 1.2);
+  else if (e.key === '0') canvas().zoom('fit-viewport');
+  else return;
+  e.preventDefault();
+});
+
+// Escape goes up one level (wherever the focus is, except in the picker); on the chosen
+// process it clears the selection.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !current || e.target instanceof HTMLSelectElement) return;
+  if (currentPath().length > 1) {
+    if (!backButton.disabled) goBack();
+  } else {
+    panel.select(undefined);
+  }
+  e.preventDefault();
+});
+
+new ResizeObserver(() => {
+  if (current) canvas().resized();
+}).observe(canvasHost);
+
+// Redraw with the new colours when the VS Code theme changes.
+new MutationObserver(() => {
+  const last = current;
+  viewer.destroy();
+  viewer = createViewer();
+  if (last) void render({ ...last, preserveView: false });
+}).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+// ---- Host messages ------------------------------------------------------
+
+const watchdog = startLoadWatchdog(() => {
+  if (current) return;
+  showError({
+    type: 'error',
+    title: 'The diagram did not load',
+    message: `No answer from the extension after ${LOAD_TIMEOUT_MS / 1000} seconds. Close the editor and open the file again.`,
+  });
+});
+
+window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
+  const msg = event.data;
+  if (msg?.type === 'render') {
+    watchdog.answered();
+    void render(msg);
+  } else if (msg?.type === 'error') {
+    watchdog.answered();
+    hideBanner();
+    showError(msg);
+  } else if (msg?.type === 'refreshError') {
+    watchdog.answered();
+    showBanner(msg);
+  }
+});
+
+setControlsEnabled(false);
+// Tell the host we are listening; it posts the first render only after this.
+vscode.postMessage({ type: 'ready' });
+
+// ---- Helpers ------------------------------------------------------------
+
+function button(text: string, tooltip: string): HTMLButtonElement {
+  return h('button', { type: 'button', class: 'button', title: tooltip, 'aria-label': tooltip }, text);
+}
+
+function toggle(text: string, tooltip: string): { label: HTMLLabelElement; input: HTMLInputElement } {
+  const input = h('input', { type: 'checkbox' });
+  const label = h('label', { class: 'toggle', title: tooltip }, input, text);
+  return { label, input };
+}

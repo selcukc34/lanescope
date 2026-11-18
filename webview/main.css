@@ -1,0 +1,591 @@
+/* Viewer layout. Colours come from the VS Code theme variables. */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  overflow: hidden;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font: inherit;
+}
+
+.mono {
+  font-family: var(--vscode-editor-font-family);
+}
+
+.muted {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ---- Toolbar ---------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.toolbar .title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.toolbar .title[hidden],
+.process-select[hidden] {
+  display: none;
+}
+
+.process-select {
+  max-width: 320px;
+  padding: 2px 4px;
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  font: inherit;
+}
+
+.process-select:disabled {
+  opacity: 0.5;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.toolbar .group {
+  display: flex;
+  gap: 2px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.button {
+  min-width: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.button:disabled,
+.toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Main area -------------------------------------------------------- */
+
+.main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+
+.canvas:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-editor-background);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.error {
+  max-width: 560px;
+  padding: 16px;
+  border-left: 3px solid var(--vscode-errorForeground);
+}
+
+.error h2 {
+  margin-top: 0;
+  color: var(--vscode-errorForeground);
+}
+
+.error p {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Selected element in the diagram. */
+.djs-element.selected .djs-outline {
+  stroke: var(--vscode-focusBorder);
+  stroke-width: 2px;
+  visibility: visible;
+}
+
+/* ---- Side panel ------------------------------------------------------- */
+
+.panel {
+  width: 340px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--vscode-panel-border, transparent);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  min-height: 0;
+}
+
+.tabs {
+  display: flex;
+  flex: none;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.tab {
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+}
+
+.tab.active {
+  color: var(--vscode-foreground);
+  border-bottom-color: var(--vscode-focusBorder);
+}
+
+.tab.has-warnings {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+.tab-bodies {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.tab-body h2 {
+  font-size: 1.15em;
+  margin: 4px 0 8px;
+  word-break: break-word;
+}
+
+.tab-body h3 {
+  font-size: 1em;
+  margin: 14px 0 6px;
+}
+
+.hint,
+.empty {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.doc {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.fields dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+.fields dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.params {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.params li {
+  padding: 2px 0;
+}
+
+.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.code {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.datatype {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.datatype.flash {
+  animation: flash 1.2s ease-out;
+}
+
+@keyframes flash {
+  from {
+    background: var(--vscode-editor-findMatchHighlightBackground);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.datatype table,
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.datatype th,
+.datatype td,
+table.grid th,
+table.grid td {
+  text-align: left;
+  vertical-align: top;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.datatype th,
+table.grid th {
+  color: var(--vscode-descriptionForeground);
+  font-weight: normal;
+}
+
+table.grid td {
+  word-break: break-word;
+}
+
+.expr {
+  font-family: var(--vscode-editor-font-family);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 0.85em;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+
+.section-head h3 {
+  margin: 0;
+}
+
+.section-head .button {
+  margin-left: auto;
+}
+
+.code.script {
+  max-height: none;
+  overflow-x: auto;
+  tab-size: 4;
+}
+
+.button.small {
+  padding: 0 6px;
+  font-size: 0.9em;
+}
+
+.center {
+  text-align: center !important;
+}
+
+.warnings {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.warnings li {
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+/* ---- Live refresh ----------------------------------------------------- */
+
+.toolbar .updated {
+  white-space: nowrap;
+  font-size: 0.9em;
+}
+
+.toolbar .updated[hidden] {
+  display: none;
+}
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  flex: none;
+  color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
+  background: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.12));
+  border-bottom: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+}
+
+.banner[hidden] {
+  display: none;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.banner-close {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.2em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.banner-close:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+/* Inside a called service */
+
+.actions {
+  margin: 10px 0 0;
+}
+
+.inside {
+  margin: 14px 0 0;
+  padding: 4px 8px 8px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  border-radius: 4px;
+}
+
+.inside > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.inside > summary::before {
+  content: '▸';
+  color: var(--vscode-descriptionForeground);
+}
+
+.inside[open] > summary::before {
+  content: '▾';
+}
+
+.inside > summary::-webkit-details-marker {
+  display: none;
+}
+
+.inside-title {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.tab-body h4 {
+  font-size: 0.95em;
+  margin: 12px 0 4px;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 600;
+}
+
+.steps {
+  margin: 0;
+  padding-left: 1.6em;
+}
+
+.step {
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.step:last-child {
+  border-bottom: none;
+}
+
+.step-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  word-break: break-word;
+}
+
+.step-line + .step-line {
+  margin-top: 2px;
+}
+
+.step .fields {
+  margin-top: 4px;
+}
+
+.step table.grid {
+  margin-top: 4px;
+}
+
+.badge.kind {
+  margin-left: 0;
+  border-radius: 3px;
+}
+
+.fold {
+  margin-top: 4px;
+}
+
+.fold > summary {
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground);
+}
+
+.fold > .section-head,
+.fold > section > .section-head {
+  margin-top: 6px;
+}
+
+.coach {
+  margin: 6px 0 10px;
+}
+
+/* ---- Breadcrumb ------------------------------------------------------- */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  flex: none;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.crumbs[hidden] {
+  display: none;
+}
+
+.crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.crumbs li {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.crumbs li + li::before {
+  content: '›';
+  padding: 0 6px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.crumbs li[aria-current='page'] {
+  font-weight: 600;
+}
+
+.crumbs .note {
+  font-style: italic;
+}
+
+.crumbs .note[hidden] {
+  display: none;
+}
+
+.tab-body .subtitle {
+  margin: -4px 0 8px;
+}
