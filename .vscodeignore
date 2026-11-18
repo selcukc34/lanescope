@@ -3,7 +3,7 @@
 # configs, source maps) stays out of the .vsix.
 **
 !dist/**
-!media/**
+!media/icon.png
 !README.md
 !CHANGELOG.md
 !LICENSE

@@ -1,0 +1,73 @@
+name: Publish to Open VSX
+
+# Publishes the .vsix attached to a GitHub Release to Open VSX.
+# Run it by hand (Actions > Publish to Open VSX > Run workflow) with the
+# release tag. It has no release trigger: release.yml creates the Release
+# with GITHUB_TOKEN, and events from that token start no workflows.
+# The file is downloaded from the Release, not rebuilt, so the extension on
+# Open VSX is byte for byte the one on the Release page.
+# The open-vsx environment requires a manual approval and holds OVSX_PAT.
+# There is no VS Code Marketplace publishing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.3.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish .vsix to Open VSX
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: open-vsx
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # Only for the pinned ovsx CLI; nothing is built.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download .vsix from the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$TAG' is not a version tag (vX.Y.Z)."; exit 1 ;;
+          esac
+          version="${TAG#v}"
+          vsix="lanescope-$version.vsix"
+          mkdir -p release-vsix
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$vsix" \
+            --dir release-vsix
+          test -f "release-vsix/$vsix" || { echo "::error::$vsix is not attached to Release $TAG."; exit 1; }
+          sha256sum "release-vsix/$vsix" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "VSIX=release-vsix/$vsix" >> "$GITHUB_ENV"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --no-install ovsx publish "$VSIX" -p "$OVSX_PAT"
