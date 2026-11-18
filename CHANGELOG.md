@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-11-18
+
+### Changed
+
+- Published on [Open VSX](https://open-vsx.org/extension/selcukc/lanescope): in IBM Bob, search for **Lanescope** in the Extensions view to install it.
+- The README shows screenshots and links to the Open VSX listing.
+
 ## 0.3.0 — 2026-11-18
 
 ### Changed

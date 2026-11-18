@@ -5,6 +5,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # @types/vscode must match engines.vscode in package.json: newer types
+      # would allow APIs that the minimum supported VS Code lacks. Both are
+      # raised together by hand.
+      - dependency-name: '@types/vscode'
+      # The @types/node major follows the Node.js major the project targets
+      # (CI runs Node 22), not the latest Node release.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       dev-dependencies:
         dependency-type: development
