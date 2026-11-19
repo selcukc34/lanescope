@@ -20,6 +20,7 @@ export default tseslint.config(
       'src/xsd/**',
       'src/twx/**',
       'src/validate/**',
+      'src/views/exportFiles.ts',
       'src/views/protocol.ts',
       'src/views/viewModel.ts',
       'src/views/viewerSession.ts',

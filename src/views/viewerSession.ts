@@ -32,7 +32,16 @@
 // below the chosen process is kept across toggles and settings; a reload
 // resolves it again and stays at the deepest level that still exists. Picking
 // another process in the picker starts a new path.
+//
+// Export: exportBpmn() lays out the drawn level again with every flow name
+// and lane kept (the toolbar toggles do not apply) and never with script
+// text. A BPMN export is written by the host right away; for an SVG or PNG
+// the host sends that XML to the webview (exportSource) and accepts the
+// image back (exportData) only for the request id it gave out last. Where to
+// write is asked (ExportHost) before anything is drawn.
 
+import { toDiagramXml } from '../bpmn/toDiagramXml';
+import { BPMN_EXPORT_COMMENT } from './exportFiles';
 import type { Process, ProcessPackage } from '../model/model';
 import { MAX_PATH_DEPTH, openInPath, resolvePath } from './navigation';
 import {
@@ -41,6 +50,8 @@ import {
   defaultViewOptions,
   parseWebviewMessage,
   type ErrorMessage,
+  type ExpectedExport,
+  type ExportFormat,
   type HostMessage,
   type LevelSummary,
   type OpenCalleeMessage,
@@ -76,7 +87,38 @@ export interface ViewerSessionDeps {
   now?: () => number;
   /** Extension settings at the time the viewer opens. */
   settings?: ViewerSettings;
+  /** Asks where to save an export and writes it; without it nothing is exported. */
+  exporter?: ExportHost;
 }
+
+/** What an export is about: its format, and the drawn level's name when it is below the chosen process. */
+export interface ExportRequest {
+  format: ExportFormat;
+  levelName?: string;
+}
+
+/** The editor side of an export (save dialog, file write, messages). */
+export interface ExportHost {
+  /** Asks where to save; a checked path of a new file, or undefined when cancelled or refused. */
+  chooseTarget(request: ExportRequest): Promise<string | undefined>;
+  /** Writes the export to the path chooseTarget gave. */
+  write(target: string, format: ExportFormat, bytes: Uint8Array): Promise<void>;
+  /** The export failed; the viewer is left as it is. */
+  failed(message: string): void;
+}
+
+/** The drawn level as BPMN with diagram interchange, ready to be exported. */
+export interface BpmnExport {
+  xml: string;
+  /** Name of the drawn level, only when it is below the chosen process. */
+  levelName?: string;
+}
+
+/** Exports keep every flow name and every lane, whatever the toolbar shows. */
+const EXPORT_DIAGRAM_OPTIONS = { hideGeneratedFlowLabels: false, hideEmptyLanes: false } as const;
+
+/** A BPMN script element (bpmn:script), which an export must never hold. */
+const SCRIPT_ELEMENT = /<(?:[\w.-]+:)?script[\s/>]/;
 
 interface Loaded {
   pkg: ProcessPackage;
@@ -124,6 +166,9 @@ export class ViewerSession {
   /** A change came in while `refreshing` ran: read once more after it. */
   private refreshAgain = false;
   private disposed = false;
+  /** The image export the webview is drawing, and where it goes. */
+  private expectedExport: (ExpectedExport & { target: string }) | undefined;
+  private exportCounter = 0;
   private readonly timers: Timers;
   private readonly debounceMs: number;
   private readonly now: () => number;
@@ -214,7 +259,7 @@ export class ViewerSession {
 
   /** Handles one raw message from the webview. Unknown messages are ignored. */
   async handleMessage(raw: unknown): Promise<void> {
-    const msg = parseWebviewMessage(raw);
+    const msg = parseWebviewMessage(raw, this.expectedExport);
     if (!msg || this.disposed) return;
     if (msg.type === 'ready') {
       this.webviewReady = true;
@@ -229,10 +274,76 @@ export class ViewerSession {
     } else if (msg.type === 'openCallee') {
       this.pending = this.run('navigate', msg);
       await this.pending;
-    } else {
+    } else if (msg.type === 'setOptions') {
       this.options = { ...msg.options };
       this.pending = this.run('options');
       await this.pending;
+    } else if (msg.type === 'exportRequest') {
+      await this.requestExport(msg.format);
+    } else {
+      const expected = this.expectedExport!;
+      this.expectedExport = undefined;
+      await this.writeExport(expected.target, expected.format, msg.bytes);
+    }
+  }
+
+  /**
+   * Exports the drawn level: asks where, then writes the BPMN, or has the
+   * webview draw the image. False when there is nothing to export (no
+   * diagram drawn, or no exporter).
+   */
+  async requestExport(format: ExportFormat): Promise<boolean> {
+    const exporter = this.deps.exporter;
+    if (this.disposed || !this.good || !exporter) return false;
+    let bpmn: BpmnExport;
+    try {
+      bpmn = await this.exportBpmn();
+    } catch (err) {
+      exporter.failed(`Cannot export the diagram: ${errorText(err)}`);
+      return true;
+    }
+    const target = await exporter.chooseTarget({ format, ...(bpmn.levelName !== undefined ? { levelName: bpmn.levelName } : {}) });
+    if (target === undefined || this.disposed) return true;
+    if (format === 'bpmn') {
+      await this.writeExport(target, format, new TextEncoder().encode(bpmn.xml));
+      return true;
+    }
+    // A newer request replaces an older one: data for the older id is refused.
+    const requestId = `export-${++this.exportCounter}`;
+    this.expectedExport = { requestId, format, target };
+    this.post({ type: 'exportSource', requestId, format, xml: bpmn.xml });
+    return true;
+  }
+
+  /**
+   * The drawn level as BPMN with its layout: the same process the viewer
+   * shows (chosen process and opened levels), laid out with every flow name
+   * and lane. Holds no script text.
+   */
+  async exportBpmn(): Promise<BpmnExport> {
+    const good = this.good;
+    if (!good) throw new Error('There is no diagram to export.');
+    const pkg = good.loaded.pkg;
+    const root = pkg.processes.find((p) => p.id === good.render.rootProcessId);
+    if (!root) throw new Error('The shown process is no longer in the file.');
+    const resolved = await resolvePath<Level>([processLevelId(root), ...good.below], (id, depth) =>
+      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id),
+    );
+    if (resolved.missing !== undefined) throw new Error('The shown diagram is no longer in the file.');
+    const process = resolved.levels[resolved.levels.length - 1].value.process;
+    const { xml } = await toDiagramXml(process, EXPORT_DIAGRAM_OPTIONS);
+    // toDiagramXml writes no script; this keeps it that way.
+    if (SCRIPT_ELEMENT.test(xml)) throw new Error('The export would contain script text.');
+    return { xml: withExportComment(xml), ...(good.below.length > 0 ? { levelName: process.name || process.id } : {}) };
+  }
+
+  private async writeExport(target: string, format: ExportFormat, bytes: Uint8Array): Promise<void> {
+    const exporter = this.deps.exporter;
+    if (!exporter || this.disposed) return;
+    try {
+      await exporter.write(target, format, bytes);
+    } catch (err) {
+      exporter.failed(`Cannot export the diagram: ${errorText(err)}`);
     }
   }
 
@@ -378,6 +489,18 @@ export class ViewerSession {
   private post(message: HostMessage): void {
     if (this.webviewReady && !this.disposed) this.deps.post(message);
   }
+}
+
+/** The XML with BPMN_EXPORT_COMMENT after its XML declaration (at the top when it has none). */
+function withExportComment(xml: string): string {
+  const declaration = /^<\?xml[^>]*\?>\r?\n?/.exec(xml);
+  const end = declaration ? declaration[0].length : 0;
+  const head = declaration ? `${declaration[0].trimEnd()}\n` : '';
+  return `${head}${BPMN_EXPORT_COMMENT}\n${xml.slice(end)}`;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {

@@ -269,7 +269,26 @@ export interface RefreshErrorMessage {
   message: string;
 }
 
-export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage;
+/** What the drawn diagram can be exported as. */
+export type ExportFormat = 'bpmn' | 'svg' | 'png';
+
+export const EXPORT_FORMATS: readonly ExportFormat[] = ['bpmn', 'svg', 'png'];
+
+/** Largest export the host accepts from the webview (bytes, after decoding). */
+export const MAX_EXPORT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Host -> webview: draw this BPMN (the export XML: every flow name and lane
+ * kept) with fixed light colours and send it back as an image (exportData).
+ */
+export interface ExportSourceMessage {
+  type: 'exportSource';
+  requestId: string;
+  format: 'svg' | 'png';
+  xml: string;
+}
+
+export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage;
 
 /** Webview -> host: the webview script is loaded and listening. */
 export interface ReadyMessage {
@@ -299,18 +318,65 @@ export interface OpenCalleeMessage {
   path: string[];
 }
 
-export type WebviewMessage = ReadyMessage | SetOptionsMessage | SelectProcessMessage | OpenCalleeMessage;
+/** Webview -> host: the user asked to export the drawn diagram. */
+export interface ExportRequestMessage {
+  type: 'exportRequest';
+  format: ExportFormat;
+}
+
+/**
+ * Webview -> host: the image for an exportSource. As sent, `data` is the SVG
+ * text or a PNG data URL; parseWebviewMessage checks it and gives the file
+ * bytes in `bytes`.
+ */
+export interface ExportDataMessage {
+  type: 'exportData';
+  requestId: string;
+  format: 'svg' | 'png';
+  data: string;
+}
+
+/** An exportData message that passed the checks, with the bytes to write. */
+export interface ParsedExportData {
+  type: 'exportData';
+  requestId: string;
+  format: 'svg' | 'png';
+  bytes: Uint8Array;
+}
+
+export type WebviewMessage =
+  | ReadyMessage
+  | SetOptionsMessage
+  | SelectProcessMessage
+  | OpenCalleeMessage
+  | ExportRequestMessage
+  | ExportDataMessage;
+
+/** A webview message after parseWebviewMessage. */
+export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
+
+/** The image export the host is waiting for: only data for it is accepted. */
+export interface ExpectedExport {
+  requestId: string;
+  format: 'svg' | 'png';
+}
 
 /** Longest id accepted from the webview. */
 const MAX_ID_LENGTH = 256;
 
 const isId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= MAX_ID_LENGTH;
 
-/** Validates a message received from the webview (it is untrusted input). */
-export function parseWebviewMessage(value: unknown): WebviewMessage | undefined {
+/**
+ * Validates a message received from the webview (it is untrusted input).
+ * exportData is accepted only for `expected`, the latest image export the
+ * host asked for; older or unknown request ids are rejected.
+ */
+export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): ParsedWebviewMessage | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const msg = value as Record<string, unknown>;
   if (msg.type === 'ready') return { type: 'ready' };
+  if (msg.type === 'exportRequest' && isExportFormat(msg.format)) return { type: 'exportRequest', format: msg.format };
+  if (msg.type === 'exportData') return parseExportData(msg, expected);
   if (msg.type === 'selectProcess' && typeof msg.processId === 'string' && msg.processId.length > 0) {
     return { type: 'selectProcess', processId: msg.processId };
   }
@@ -333,4 +399,41 @@ export function parseWebviewMessage(value: unknown): WebviewMessage | undefined 
     }
   }
   return undefined;
+}
+
+function isExportFormat(v: unknown): v is ExportFormat {
+  return typeof v === 'string' && (EXPORT_FORMATS as readonly string[]).includes(v);
+}
+
+const PNG_PREFIX = 'data:image/png;base64,';
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+/** Longest base64 text that can decode to at most MAX_EXPORT_BYTES. */
+const MAX_PNG_BASE64 = Math.ceil(MAX_EXPORT_BYTES / 3) * 4;
+
+function parseExportData(msg: Record<string, unknown>, expected: ExpectedExport | undefined): ParsedExportData | undefined {
+  if (!expected || msg.requestId !== expected.requestId || msg.format !== expected.format) return undefined;
+  if (typeof msg.data !== 'string') return undefined;
+  const bytes = expected.format === 'svg' ? svgBytes(msg.data) : pngBytes(msg.data);
+  return bytes ? { type: 'exportData', requestId: expected.requestId, format: expected.format, bytes } : undefined;
+}
+
+/** UTF-8 bytes of an SVG document: starts with <svg, has no script, at most MAX_EXPORT_BYTES. */
+function svgBytes(data: string): Uint8Array | undefined {
+  // UTF-8 takes at least one byte per UTF-16 code unit: what is longer can only be too large.
+  if (data.length > MAX_EXPORT_BYTES || !data.startsWith('<svg') || /<script\b/i.test(data)) return undefined;
+  const bytes = new TextEncoder().encode(data);
+  return bytes.length <= MAX_EXPORT_BYTES ? bytes : undefined;
+}
+
+/** Bytes of a PNG data URL: base64 only, at most MAX_EXPORT_BYTES, with the PNG signature. */
+function pngBytes(data: string): Uint8Array | undefined {
+  if (!data.startsWith(PNG_PREFIX)) return undefined;
+  const base64 = data.slice(PNG_PREFIX.length);
+  if (base64.length === 0 || base64.length > MAX_PNG_BASE64 || base64.length % 4 !== 0) return undefined;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) return undefined;
+  const binary = atob(base64);
+  if (binary.length > MAX_EXPORT_BYTES || binary.length < PNG_SIGNATURE.length) return undefined;
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return PNG_SIGNATURE.every((b, i) => bytes[i] === b) ? bytes : undefined;
 }

@@ -47,6 +47,7 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **Hide generated flow labels** | Hides flow names that only repeat the target ("To &lt;target&gt;"). Condition and default flows keep their label. On by default. |
 | **Show empty lanes** | Draws lanes that hold no nodes. On by default for a `.twx` export (BAW draws them, with their BAW height); off for Bob output, where the Warnings tab lists them instead. |
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
+| **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Changing a toggle redraws the diagram and keeps the zoom and the selection. The toggles keep their state across live refresh, the process selector and opened services; the default by input type applies only when the file is first opened.
 
@@ -100,6 +101,23 @@ Click a node to see what the source holds for it. A section appears only when th
 
 The viewer only shows what is in the file. It does not judge, score or rewrite any of it.
 
+## Export
+
+**Export** in the toolbar, or **Lanescope: Export Diagram…** in the Command Palette, saves the diagram that is shown (the chosen process, or the service flow or linked process opened below it) to a new file:
+
+| Format | What you get |
+| --- | --- |
+| **BPMN with layout, no scripts** (`.bpmn`) | BPMN 2.0 XML with diagram interchange: the layout the viewer computed is stored as coordinates, so other BPMN tools (and Lanescope) draw it as shown. |
+| **SVG image** (`.svg`) | The diagram as a vector image. |
+| **PNG image** (`.png`) | The diagram at twice its size, scaled down for very large diagrams (at most 16384 pixels a side and 64 megapixels). |
+
+- A save dialog asks where to save. It opens in the folder of the last export (while that folder exists), else next to the opened file. The suggested name is `<file>.laid-out.bpmn`, `<file>.svg` or `<file>.png`, with the name of an opened service flow or linked process added (`<file>-<level>.svg`), and `-2`, `-3`, … when that name is taken.
+- An export always goes to a new file. The opened file and the files of its package are never written: the save dialog refuses the opened file itself, any `.twx`, `.zip` or `.xsd` file, and a file with another extension than the format's.
+- Exports hold every flow name and every lane: the toolbar toggles change only what the viewer shows. Gateway conditions and documentation (as plain text) are kept.
+- The BPMN export is a diagram and layout export, not a complete process to import back into BAW. Script code is never included, in any format: script tasks are exported without their script.
+- Images are drawn in light colours (white fill, black lines, on a white background) whatever the VS Code theme.
+- For a `.twx` export, ids that are not valid XML ids are replaced by safe ids (as in the viewer); the original BAW ids are not in the exported BPMN.
+
 ## Live refresh
 
 The viewer watches the opened file and re-reads it 300 ms after the last change. For a `.zip` or `.twx` it watches that file itself. For a `.bpmn` it also watches the `.xsd` files in the same folder. A file that is deleted and written again (as Bob may do) is picked up too.
@@ -123,6 +141,7 @@ The viewer watches the opened file and re-reads it 300 ms after the last change.
 ## Read-only guarantee
 
 - The extension only reads the files you open. It never writes, changes, renames or deletes a `.bpmn`, `.xsd`, `.zip` or `.twx` file, and it never deploys anything.
+- The one file it writes is an [export](#export), to a new file you pick, never to the opened file or an input type.
 - Archives are read in memory; nothing is extracted to disk.
 - The diagram view runs under a strict Content Security Policy, uses only scripts bundled in the extension, and makes no network requests.
 
