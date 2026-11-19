@@ -22,6 +22,7 @@ import {
   inflate,
   isMetadataEntry,
   isSafeEntryName,
+  openZip,
   originalEntryName,
   ZipLimitError,
   type Budget,
@@ -102,19 +103,20 @@ export async function readTwxArchive(
 ): Promise<TwxArchive> {
   const lim = { ...DEFAULT_TWX_LIMITS, ...limits };
 
+  // Nothing is inflated before the entry count and the declared sizes are checked.
   let zip: JSZip;
   try {
-    zip = await JSZip.loadAsync(data, { checkCRC32: true });
-  } catch {
+    zip = await openZip(data, lim.maxEntries);
+  } catch (err) {
+    if (err instanceof ZipLimitError) {
+      throw new TwxReadError(err.message.replace(/^Zip has /, 'The TWX archive has '));
+    }
     // The low-level message is not useful to users.
     throw new TwxReadError('The file is not a valid TWX/zip archive: it is truncated or corrupt.');
   }
 
   const entries = Object.values(zip.files);
   if (entries.length === 0) throw new TwxReadError('The file is not a valid TWX/zip archive: it is empty.');
-  if (entries.length > lim.maxEntries) {
-    throw new TwxReadError(`The TWX archive has ${entries.length} entries; the limit is ${lim.maxEntries}.`);
-  }
   const declaredTotal = entries.reduce((n, e) => n + declaredSize(e), 0);
   if (declaredTotal > lim.maxTotalUncompressedBytes) {
     throw new TwxReadError(
@@ -208,12 +210,16 @@ async function readToolkitPackages(
   for (const { name, entry } of zips) {
     const fail = (why: string) => warnings.push(`The packed toolkit ${name} could not be read (${why}); names from it are not shown.`);
     try {
-      const inner = await JSZip.loadAsync(await inflate(entry, budget, lim.maxEntryBytes), { checkCRC32: true });
-      const entries = Object.values(inner.files);
-      if (entries.length > lim.maxEntries) {
-        fail(`more than ${lim.maxEntries} entries`);
+      const bytes = await inflate(entry, budget, lim.maxEntryBytes);
+      let inner: JSZip;
+      try {
+        // Only the inner package.xml is inflated, under the outer archive's budget.
+        inner = await openZip(bytes, lim.maxEntries);
+      } catch (err) {
+        fail(err instanceof ZipLimitError ? `more than ${lim.maxEntries} entries` : 'not a valid zip archive');
         continue;
       }
+      const entries = Object.values(inner.files);
       const pkg = entries.find((e) => !e.dir && originalEntryName(e).replace(/\\/g, '/').toLowerCase() === 'meta-inf/package.xml');
       if (!pkg) {
         fail('no META-INF/package.xml');

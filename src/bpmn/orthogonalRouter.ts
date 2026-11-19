@@ -95,9 +95,33 @@ function strictlyInside(p: Point, b: Bounds): boolean {
 }
 
 /**
+ * Work the router may still do, shared by every flow of one diagram. A unit
+ * is one obstacle test; a search step costs as many units as there are
+ * obstacles. The search grows with the square of the node count, so a
+ * crafted diagram with thousands of nodes and flows could otherwise keep the
+ * extension host busy for hours. Once spent, routeBetweenPorts returns
+ * undefined and the caller falls back to a simple route.
+ */
+export interface RouteBudget {
+  remaining: number;
+}
+
+/**
+ * Units for one diagram: several times what a 300-node diagram with local
+ * flows needs (about 150 million, well under a second), and small enough
+ * that the worst case stays at a few seconds.
+ */
+export const DEFAULT_ROUTE_BUDGET = 1_000_000_000;
+
+export function createRouteBudget(units = DEFAULT_ROUTE_BUDGET): RouteBudget {
+  return { remaining: units };
+}
+
+/**
  * Routes a flow from `source` (leaving through `sourcePort`) to `target`
  * (entering through `targetPort`), around `obstacles` (every drawn node,
- * source and target included). Returns undefined when no path exists.
+ * source and target included). Returns undefined when no path exists, or
+ * when `budget` runs out (a fresh, unlimited one when not given).
  */
 export function routeBetweenPorts(
   source: Bounds,
@@ -105,7 +129,9 @@ export function routeBetweenPorts(
   target: Bounds,
   targetPort: PortLocation,
   obstacles: Bounds[],
+  budget: RouteBudget = { remaining: Infinity },
 ): Point[] | undefined {
+  if (budget.remaining <= 0) return undefined;
   const start = portPoint(source, sourcePort);
   const end = portPoint(target, targetPort);
   const others = obstacles.filter((o) => o !== source && o !== target);
@@ -132,7 +158,7 @@ export function routeBetweenPorts(
   }
   const blocked = (a: Point, b: Point) => blocks.some((box) => segmentCrosses(a, b, box));
 
-  const path = search(startStub, endStub, outDir, inDir, blocks, blocked);
+  const path = search(startStub, endStub, outDir, inDir, blocks, blocked, budget);
   if (!path) return undefined;
   return simplify([start, ...path, end]);
 }
@@ -211,7 +237,10 @@ function search(
   inDir: Point,
   blocks: Bounds[],
   blocked: (a: Point, b: Point) => boolean,
+  budget: RouteBudget,
 ): Point[] | undefined {
+  // Each step tests every block up to five times (free, then blocked per direction).
+  const stepCost = Math.max(1, blocks.length) * 5;
   const xs = axis([from.x, to.x, ...blocks.flatMap((b) => [b.x, b.x + b.width])]);
   const ys = axis([from.y, to.y, ...blocks.flatMap((b) => [b.y, b.y + b.height])]);
   const xi0 = xs.indexOf(from.x);
@@ -235,6 +264,8 @@ function search(
     const k = key(state);
     if (done.has(k)) continue;
     done.add(k);
+    budget.remaining -= stepCost;
+    if (budget.remaining < 0) return undefined;
     if (state.xi === xiEnd && state.yi === yiEnd) {
       const points: Point[] = [];
       let s: State | undefined = state;

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 — 2026-11-19
+
+### Security
+
+- Zip archives (`.zip` and `.twx`, and the toolkits packed in a `.twx`) are checked against the entry count and size limits before anything in them is uncompressed, and each entry's checksum is verified as it is read.
+- Diagram layout runs in a separate worker thread with a time limit, so a very large or densely connected process no longer slows down the editor; flow routing has a work limit too. A diagram with more than 5,000 nodes or 20,000 sequence flows is not drawn, and the viewer says why.
+- Rich-text documentation is converted to plain text in linear time.
+- `.bpmn` and `.xsd` documents with a DOCTYPE are rejected, as `.twx` objects already were.
+- The size of a `.bpmn` file and the `.xsd` files next to it is checked before they are read.
+- Live refresh runs at most one re-read at a time, however often the file changes.
+- The diagram view's Content Security Policy also sets `base-uri` and `form-action` to `'none'`.
+
 ## 0.3.1 — 2026-11-18
 
 ### Changed

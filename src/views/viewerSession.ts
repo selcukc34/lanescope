@@ -10,7 +10,8 @@
 // the webview reloads and sends "ready" again, the current state is re-sent.
 //
 // Live refresh: fileChanged() re-reads the package after a quiet period
-// (debounce). If that fails while a good diagram is shown, the diagram stays
+// (debounce). At most one such read runs at a time: changes that come in
+// while it runs give one more read after it, however many there are. If that fails while a good diagram is shown, the diagram stays
 // and the failure is sent as a "refreshError" banner; the next good read
 // replaces it with a normal render.
 //
@@ -118,6 +119,10 @@ export class ViewerSession {
   /** True once the webview has said it is listening. */
   private webviewReady = false;
   private refreshTimer: unknown;
+  /** The reload fileChanged() started, while it runs. */
+  private refreshing: Promise<void> | undefined;
+  /** A change came in while `refreshing` ran: read once more after it. */
+  private refreshAgain = false;
   private disposed = false;
   private readonly timers: Timers;
   private readonly debounceMs: number;
@@ -163,8 +168,24 @@ export class ViewerSession {
     if (this.refreshTimer !== undefined) this.timers.clearTimeout(this.refreshTimer);
     this.refreshTimer = this.timers.setTimeout(() => {
       this.refreshTimer = undefined;
-      void this.reload();
+      this.refresh();
     }, this.debounceMs);
+  }
+
+  /** A debounced reload; never more than one at a time, so slow reads do not pile up. */
+  private refresh(): void {
+    if (this.disposed) return;
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return;
+    }
+    this.refreshing = this.reload().finally(() => {
+      this.refreshing = undefined;
+      if (this.refreshAgain) {
+        this.refreshAgain = false;
+        this.refresh();
+      }
+    });
   }
 
   /** Re-reads the file now and posts the result. */

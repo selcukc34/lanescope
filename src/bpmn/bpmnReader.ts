@@ -15,6 +15,7 @@ import type {
   ProcessPackage,
 } from '../model/model';
 import type { BpmnPackageInput } from '../input/bpmnInput';
+import { DOCTYPE_MESSAGE, hasDoctype } from '../input/xmlGuard';
 import { htmlToPlainText } from '../model/plainText';
 import { readXsd } from '../xsd/xsdReader';
 
@@ -105,6 +106,8 @@ export async function readProcessPackage(input: BpmnPackageInput): Promise<Proce
 
 /** Parses BPMN XML and maps every bpmn:process onto the shared model. */
 export async function readBpmn(xml: string): Promise<BpmnReadResult> {
+  // Checked before bpmn-moddle and the raw scan below parse the text.
+  if (hasDoctype(xml)) throw new Error(`Invalid BPMN: ${DOCTYPE_MESSAGE}`);
   const moddle = BpmnModdle({ icp: icpDescriptor });
   let result;
   try {

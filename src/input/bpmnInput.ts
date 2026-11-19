@@ -10,6 +10,7 @@ import {
   inflate as inflateEntry,
   isMetadataEntry,
   isSafeEntryName,
+  openZip,
   originalEntryName,
   ZipLimitError,
   type Budget,
@@ -73,6 +74,10 @@ export async function readBpmnPackage(
  * not recursive), so that bpmn:import locations can be resolved.
  */
 async function readBpmnFile(filePath: string, lim: PackageLimits): Promise<BpmnPackageInput> {
+  // Sizes are checked before a file is read into memory (and again after, in case it grew).
+  if ((await stat(filePath)).size > lim.maxUncompressedBytes) {
+    throw new BpmnInputError(`BPMN file is larger than ${lim.maxUncompressedBytes} bytes.`);
+  }
   const bpmnBytes = await readFile(filePath);
   let total = bpmnBytes.length;
   if (total > lim.maxUncompressedBytes) {
@@ -89,12 +94,14 @@ async function readBpmnFile(filePath: string, lim: PackageLimits): Promise<BpmnP
   }
 
   const xsdFiles: Record<string, string> = {};
+  const tooLarge = () =>
+    new BpmnInputError(`BPMN and XSD files together are larger than ${lim.maxUncompressedBytes} bytes.`);
   for (const name of xsdNames) {
-    const bytes = await readFile(path.join(dir, name));
+    const xsdPath = path.join(dir, name);
+    if (total + (await stat(xsdPath)).size > lim.maxUncompressedBytes) throw tooLarge();
+    const bytes = await readFile(xsdPath);
     total += bytes.length;
-    if (total > lim.maxUncompressedBytes) {
-      throw new BpmnInputError(`BPMN and XSD files together are larger than ${lim.maxUncompressedBytes} bytes.`);
-    }
+    if (total > lim.maxUncompressedBytes) throw tooLarge();
     xsdFiles[name] = decodeText(bytes);
   }
 
@@ -115,17 +122,16 @@ export async function readBpmnZip(
 ): Promise<BpmnPackageInput> {
   const lim = { ...DEFAULT_LIMITS, ...limits };
 
+  // Nothing is inflated before the entry count, the names and the declared sizes are checked.
   let zip: JSZip;
   try {
-    zip = await JSZip.loadAsync(data, { checkCRC32: true });
+    zip = await openZip(data, lim.maxEntries);
   } catch (err) {
+    if (err instanceof ZipLimitError) throw new BpmnInputError(err.message);
     throw new BpmnInputError(`Not a valid zip file: ${(err as Error).message}`, { cause: err });
   }
 
   const entries = Object.values(zip.files);
-  if (entries.length > lim.maxEntries) {
-    throw new BpmnInputError(`Zip has ${entries.length} entries; the limit is ${lim.maxEntries}.`);
-  }
 
   let declaredTotal = 0;
   for (const entry of entries) {
