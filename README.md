@@ -133,7 +133,11 @@ The **Warnings** tab lists issues found in the opened process. The viewer only r
 | Rule | When it fires |
 | --- | --- |
 | `gateway-unconditioned-flow` | An exclusive or inclusive gateway with two or more outgoing flows has a flow that is neither the default flow nor conditioned. Gateways with a single outgoing flow (joins) are not checked. |
+| `gateway-without-outgoing-flow` | A gateway of any type has incoming flows but no outgoing flow. |
+| `disconnected-node` | A node has no incoming and no outgoing sequence flow. Boundary events and event sub-processes are not checked. |
+| `no-path-to-end` | No chain of sequence flows leads from a node to an end event (a dead end, or a loop without a way out). Nodes inside a sub-process must reach an end event of that sub-process; a sub-process without end events is not checked. A process without any end event gets a single warning. Nodes already reported by the two rules above, boundary events and event sub-processes are not reported again. |
 | `empty-lane` | A lane holds no nodes: "Lane &lt;name&gt; has no activities". |
+| `activity-without-documentation` | A task, script task, user task, service task, call activity or sub-process has empty documentation. Events and gateways are not checked. BAW exports often leave activities undocumented, so expect this rule to list several of them. |
 
 A Bob process imported into BAW 8.6.6 and exported again shows `gateway-unconditioned-flow` warnings, because BAW drops the gateway conditions on import.
 
