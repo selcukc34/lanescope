@@ -102,10 +102,14 @@ describe('webview code', () => {
   it('never sets a URL attribute (href, src, xlink:href, action) or an event handler attribute', () => {
     const found = webviewCode().flatMap(({ file, text }) =>
       text.split('\n').flatMap((line, i) =>
-        /\b(href|src|action|formaction|xlink:href)\b\s*[:=]|setAttribute\(\s*['"`](on|href|src)/.test(line) ? [`${file}:${i + 1}`] : [],
+        /\b(href|src|action|formaction|xlink:href)\b\s*[:=]|setAttribute\(\s*['"`](on|href|src)/.test(line) ? [`${file}:${i + 1}: ${line.trim()}`] : [],
       ),
     );
-    expect(found).toEqual([]);
+    // The one exception: the PNG export loads the export SVG, as a data: URL, into an image that is never shown.
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatch(/^exportImage\.ts:\d+: image\.src = svgDataUrl\(svg\);$/);
+    const exportSvg = readFileSync(path.join(ROOT, 'webview/exportSvg.ts'), 'utf8');
+    expect(exportSvg).toContain('return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;');
   });
 
   it('creates elements with text nodes only (the h() helper)', () => {

@@ -1,8 +1,9 @@
 // SECURITY.md scope 1: an opened file must not be able to make the extension
-// write, change or delete files. The extension has no code that could: these
-// tests scan every source file of the extension host and the webview, so a
-// write, delete, rename, edit, process or network API added later fails CI
-// and has to be looked at.
+// write, change or delete files. These tests scan every source file of the
+// extension host and the webview, so a write, delete, rename, edit, process
+// or network API added later fails CI and has to be looked at. The one write
+// is the export: a new file the user picks in a save dialog, checked by
+// src/views/exportFiles.ts so it is never the input or an input type.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -17,6 +18,13 @@ function sourceFiles(dir: string): string[] {
 }
 
 const FILES = [...sourceFiles('src'), ...sourceFiles('webview')];
+
+/** The one file write of the extension: an export (see processEditorProvider's exportHost). */
+const EXPORT_WRITE = `${path.join('src', 'views', 'processEditorProvider.ts')}:${
+  code(path.join('src', 'views', 'processEditorProvider.ts'))
+    .split('\n')
+    .findIndex((line) => line.includes('await vscode.workspace.fs.writeFile(uri, bytes);')) + 1
+}: await vscode.workspace.fs.writeFile(uri, bytes);`;
 
 /** Code without comments, so prose about "writing" does not count. */
 function code(file: string): string {
@@ -43,7 +51,16 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
   it('has no file system write, delete, rename or permission call', () => {
     const fsWrites =
       /\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rmSync|rmdir|rmdirSync|rename|renameSync|mkdir|mkdirSync|mkdtemp|copyFile|copyFileSync|cp|cpSync|truncate|ftruncate|symlink|link|chmod|chown|utimes|lchown|futimes)\s*\(|\brm\s*\(|\bopen\s*\([^)]*['"][wa]\+?['"]/;
-    expect(hits(fsWrites)).toEqual([]);
+    expect(hits(fsWrites)).toEqual([EXPORT_WRITE]);
+  });
+
+  it('writes only an export, to a path the export checks accepted', () => {
+    const provider = code(path.join('src', 'views', 'processEditorProvider.ts'));
+    // The target comes from the save dialog, through checkExportTarget, and nowhere else.
+    expect(provider).toContain('checkExportTarget(picked.fsPath, source.fsPath, format)');
+    expect(provider.match(/writeFile\(/g)).toHaveLength(1);
+    const session = code(path.join('src', 'views', 'viewerSession.ts'));
+    expect(session).toContain('const target = await exporter.chooseTarget(');
   });
 
   it('imports only readFile, readdir and stat from the file system module (existsSync in the ELK runner)', () => {
@@ -61,10 +78,10 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     }
   });
 
-  it('has no VS Code API that writes or edits a file', () => {
+  it('has no VS Code API that writes or edits a file (but the export write)', () => {
     expect(
       hits(/workspace\.fs\.(writeFile|delete|rename|copy|createDirectory)|WorkspaceEdit|applyEdit|\.edit\s*\(|TextEditorEdit|saveAs?\s*\(|onWillSave/),
-    ).toEqual([]);
+    ).toEqual([EXPORT_WRITE]);
   });
 
   it('registers a read-only custom editor (no save, revert or backup handlers)', () => {
@@ -84,10 +101,14 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     ).toEqual([]);
   });
 
-  it('contributes no command that exports or writes (the only command opens a file)', () => {
+  it('contributes two commands: open a file, and export the shown diagram to a new file', () => {
     const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
-      contributes: { commands: Array<{ command: string }> };
+      contributes: { commands: Array<{ command: string }>; menus: { commandPalette: Array<{ command: string; when?: string }> } };
     };
-    expect(pkg.contributes.commands.map((c) => c.command)).toEqual(['lanescope.open']);
+    expect(pkg.contributes.commands.map((c) => c.command)).toEqual(['lanescope.open', 'lanescope.export']);
+    expect(pkg.contributes.menus.commandPalette).toContainEqual({
+      command: 'lanescope.export',
+      when: 'activeCustomEditorId == lanescope.processViewer',
+    });
   });
 });

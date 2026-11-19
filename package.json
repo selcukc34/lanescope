@@ -70,6 +70,10 @@
       {
         "command": "lanescope.open",
         "title": "Lanescope: Open"
+      },
+      {
+        "command": "lanescope.export",
+        "title": "Lanescope: Export Diagram…"
       }
     ],
     "menus": {
@@ -83,6 +87,10 @@
       "commandPalette": [
         {
           "command": "lanescope.open"
+        },
+        {
+          "command": "lanescope.export",
+          "when": "activeCustomEditorId == lanescope.processViewer"
         }
       ]
     }

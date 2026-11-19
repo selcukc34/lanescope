@@ -4,6 +4,7 @@
 
 ### Added
 
+- Export of the shown diagram (the chosen process, or an opened service flow or linked process) to a new file: BPMN with layout (`.bpmn` with diagram interchange), SVG or PNG. Use **Export** in the toolbar or **Lanescope: Export Diagram…** in the Command Palette. Exports keep every flow name and lane whatever the toolbar shows, never contain script code, and images are drawn in light colours whatever the theme. The save dialog refuses the opened file, `.twx`, `.zip` and `.xsd` files and other extensions; the opened file is never written.
 - Four structural validation rules in the Warnings tab: `gateway-without-outgoing-flow`, `disconnected-node`, `no-path-to-end` and `activity-without-documentation`. `no-path-to-end` reports where the flow gets stuck (a dead end, or once per loop without a way out), and `activity-without-documentation` gives one line per process. Like the existing rules, they only report; nothing is changed. They run on processes only, not on service diagrams.
 
 ## 0.3.2 — 2026-11-19

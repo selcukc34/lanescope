@@ -589,3 +589,58 @@ table.grid td {
 .tab-body .subtitle {
   margin: -4px 0 8px;
 }
+
+/* ---- Export menu ------------------------------------------------------ */
+
+.menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px 0;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent));
+  border-radius: 3px;
+  background: var(--vscode-menu-background, var(--vscode-dropdown-background));
+  color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+.menu-item {
+  padding: 4px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu-item:hover,
+.menu-item:focus {
+  outline: none;
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
+}
+
+/* The hidden viewer that draws exports: laid out (bpmn-js measures it) but off screen. */
+.export-host {
+  position: fixed;
+  top: 0;
+  left: -20000px;
+  width: 1000px;
+  height: 800px;
+  visibility: hidden;
+  pointer-events: none;
+}

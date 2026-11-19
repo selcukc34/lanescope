@@ -10,6 +10,8 @@ import NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
 import { isPathPrefix, pathKey } from '../src/views/navigation';
 import type {
   ErrorMessage,
+  ExportFormat,
+  ExportSourceMessage,
   HostMessage,
   RefreshErrorMessage,
   RenderMessage,
@@ -17,6 +19,7 @@ import type {
   WebviewMessage,
 } from '../src/views/protocol';
 import { clear, h } from './dom';
+import { renderExportPng, renderExportSvg } from './exportImage';
 import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
 import { SidePanel, type TabId } from './panel';
 
@@ -75,6 +78,26 @@ const processSelect = h('select', {
 });
 const updated = h('span', { class: 'updated muted', hidden: '' });
 
+// Export: a button with a small menu of the formats.
+const exportButton = button('Export', 'Export the diagram to a new file');
+exportButton.setAttribute('aria-haspopup', 'menu');
+exportButton.setAttribute('aria-expanded', 'false');
+const EXPORT_ITEMS: Array<{ format: ExportFormat; text: string }> = [
+  { format: 'bpmn', text: 'BPMN with layout (.bpmn)' },
+  { format: 'svg', text: 'SVG image (.svg)' },
+  { format: 'png', text: 'PNG image (.png)' },
+];
+const exportItems = EXPORT_ITEMS.map(({ format, text }) => {
+  const item = h('button', { type: 'button', class: 'menu-item', role: 'menuitem', tabindex: '-1' }, text);
+  item.addEventListener('click', () => {
+    closeExportMenu(true);
+    vscode.postMessage({ type: 'exportRequest', format });
+  });
+  return item;
+});
+const exportMenu = h('div', { class: 'menu', role: 'menu', 'aria-label': 'Export as', hidden: '' }, ...exportItems);
+const exportGroup = h('span', { class: 'menu-anchor' }, exportButton, exportMenu);
+
 const toolbar = h(
   'div',
   { class: 'toolbar', role: 'toolbar' },
@@ -85,6 +108,7 @@ const toolbar = h(
   labelsToggle.label,
   lanesToggle.label,
   h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
+  exportGroup,
 );
 
 const canvasHost = h('div', { class: 'canvas', tabindex: '0' });
@@ -281,6 +305,9 @@ function setControlsEnabled(enabled: boolean): void {
   for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, processSelect, backButton]) {
     control.disabled = !enabled;
   }
+  // Export works on the drawn diagram only (not on the error screen), one image at a time.
+  exportButton.disabled = !enabled || exporting;
+  if (exportButton.disabled) closeExportMenu(false);
   for (const crumb of crumbList.querySelectorAll('button')) crumb.disabled = !enabled;
 }
 
@@ -373,7 +400,9 @@ canvasHost.addEventListener('keydown', (e) => {
 // process it clears the selection.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !current || e.target instanceof HTMLSelectElement) return;
-  if (currentPath().length > 1) {
+  if (!exportMenu.hidden) {
+    closeExportMenu(true);
+  } else if (currentPath().length > 1) {
     if (!backButton.disabled) goBack();
   } else {
     panel.select(undefined);
@@ -392,6 +421,77 @@ new MutationObserver(() => {
   viewer = createViewer();
   if (last) void render({ ...last, preserveView: false });
 }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+// ---- Export -------------------------------------------------------------
+
+/** True while an image is drawn for the host. */
+let exporting = false;
+
+function openExportMenu(): void {
+  if (exportButton.disabled) return;
+  exportMenu.hidden = false;
+  exportButton.setAttribute('aria-expanded', 'true');
+  exportItems[0].focus();
+}
+
+function closeExportMenu(focusButton: boolean): void {
+  if (exportMenu.hidden) return;
+  exportMenu.hidden = true;
+  exportButton.setAttribute('aria-expanded', 'false');
+  if (focusButton) exportButton.focus();
+}
+
+exportButton.addEventListener('click', () => {
+  if (exportMenu.hidden) openExportMenu();
+  else closeExportMenu(false);
+});
+exportButton.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  openExportMenu();
+});
+exportMenu.addEventListener('keydown', (e) => {
+  const index = exportItems.indexOf(document.activeElement as HTMLButtonElement);
+  if (e.key === 'Escape') {
+    closeExportMenu(true);
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    exportItems[(index + step + exportItems.length) % exportItems.length].focus();
+  } else if (e.key === 'Home' || e.key === 'End') {
+    exportItems[e.key === 'Home' ? 0 : exportItems.length - 1].focus();
+  } else if (e.key === 'Tab') {
+    closeExportMenu(false);
+    return;
+  } else {
+    return;
+  }
+  // Escape here closes the menu only; it does not go up a level.
+  e.preventDefault();
+  e.stopPropagation();
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!exportGroup.contains(e.target as Node)) closeExportMenu(false);
+});
+
+/** Draws the export BPMN the host sent as an image and sends it back. */
+async function exportImage(msg: ExportSourceMessage): Promise<void> {
+  exporting = true;
+  exportButton.disabled = true;
+  try {
+    const svg = await renderExportSvg(msg.xml);
+    const data = msg.format === 'svg' ? svg : await renderExportPng(svg);
+    vscode.postMessage({ type: 'exportData', requestId: msg.requestId, format: msg.format, data });
+  } catch (err) {
+    showBanner({
+      type: 'refreshError',
+      title: 'Cannot export the diagram',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    exporting = false;
+    exportButton.disabled = !current;
+  }
+}
 
 // ---- Host messages ------------------------------------------------------
 
@@ -416,6 +516,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   } else if (msg?.type === 'refreshError') {
     watchdog.answered();
     showBanner(msg);
+  } else if (msg?.type === 'exportSource' && (msg.format === 'svg' || msg.format === 'png')) {
+    void exportImage(msg);
   }
 });
 
