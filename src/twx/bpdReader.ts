@@ -257,7 +257,10 @@ function mapNode(el: XmlElement, ctx: WalkContext): FlowNode {
     }
   } else if (SUB_PROCESSES.has(el.name)) {
     node.kind = 'subProcess';
-    if (attr(el, 'triggeredByEvent') === 'true') node.originalType = 'subProcess (event)';
+    if (attr(el, 'triggeredByEvent') === 'true') {
+      node.originalType = 'subProcess (event)';
+      node.triggeredByEvent = true;
+    }
   } else if (el.name === 'callActivity') {
     mapCallActivity(el, node, ctx);
   }

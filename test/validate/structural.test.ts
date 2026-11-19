@@ -122,7 +122,7 @@ describe('disconnected-node', () => {
       node('b1', 'intermediateEvent', { attachedToId: 'work' }),
       node('b2', 'intermediateEvent', { originalType: 'boundaryEvent' }),
       node('b3', 'intermediateEvent', { originalType: 'bpmn:BoundaryEvent' }),
-      node('evsp', 'subProcess', { originalType: 'subProcess (event)' }),
+      node('evsp', 'subProcess', { originalType: 'subProcess (event)', triggeredByEvent: true }),
     );
     expect(validateProcess(p)).toEqual([]);
   });
@@ -155,34 +155,75 @@ describe('gateway-without-outgoing-flow', () => {
 });
 
 describe('no-path-to-end', () => {
-  it('reports every node of a dead-end branch, and nothing on the way that still reaches an end', () => {
+  const deadEnd = (id: string, message: string): ValidationIssue => ({
+    ruleId: 'no-path-to-end',
+    severity: 'warning',
+    elementId: id,
+    message,
+  });
+
+  it('reports a dead-end branch at its end only, and nothing on the way that still reaches an end', () => {
     const p = soundProcess();
-    p.nodes.push(node('esc', 'task', { name: 'Escalate' }), node('notify', 'intermediateEvent', { name: 'Notify' }));
+    p.nodes.push(node('esc', 'task', { name: 'Escalate' }), node('notify', 'intermediateEvent', { name: 'Timer 2' }));
     p.flows.push(flow('gw', 'esc', { condition: 'tw.local.late' }), flow('esc', 'notify'));
     expect(validateProcess(p)).toEqual([
-      {
-        ruleId: 'no-path-to-end',
-        severity: 'warning',
-        elementId: 'esc',
-        message: 'Task "Escalate": no path from here reaches an end event.',
-      },
-      {
-        ruleId: 'no-path-to-end',
-        severity: 'warning',
-        elementId: 'notify',
-        message: 'Intermediate event "Notify": no path from here reaches an end event.',
-      },
+      deadEnd('notify', 'Intermediate event "Timer 2": the path ends here without reaching an end event.'),
     ]);
   });
 
-  it('reports both nodes of a loop without a way out', () => {
+  it('reports each dead end once, even where branches lead to more than one', () => {
     const p = soundProcess();
-    p.nodes.push(node('a', 'task', { name: 'Check' }), node('b', 'task', { name: 'Wait' }));
-    p.flows.push(flow('gw', 'a', { condition: 'tw.local.wait' }), flow('a', 'b'), flow('b', 'a'));
+    p.nodes.push(node('a', 'task', { name: 'A' }), node('b', 'task', { name: 'B' }), node('c', 'task', { name: 'C' }));
+    p.flows.push(flow('gw', 'a', { condition: 'tw.local.a' }), flow('a', 'b'), flow('a', 'c'));
     expect(messages(validateProcess(p))).toEqual([
-      'Task "Check": no path from here reaches an end event.',
-      'Task "Wait": no path from here reaches an end event.',
+      'Task "B": the path ends here without reaching an end event.',
+      'Task "C": the path ends here without reaching an end event.',
     ]);
+  });
+
+  it('reports a loop without a way out once, on the node where it is entered', () => {
+    const p = soundProcess();
+    p.nodes.push(node('wait', 'task', { name: 'Wait' }), node('retry', 'task', { name: 'Retry' }));
+    p.flows.push(flow('gw', 'retry', { condition: 'tw.local.retry' }), flow('retry', 'wait'), flow('wait', 'retry'));
+    expect(validateProcess(p)).toEqual([
+      deadEnd('retry', 'Task "Retry": the loop starting here has no way out to an end event.'),
+    ]);
+  });
+
+  it('groups the nodes that lead into a loop with the loop, and reports where the group is entered', () => {
+    const p = soundProcess();
+    p.nodes.push(node('x', 'task', { name: 'Loop B' }), node('y', 'task', { name: 'Loop A' }), node('lead', 'task', { name: 'Lead in' }));
+    p.flows.push(flow('gw', 'lead', { condition: 'tw.local.lead' }), flow('lead', 'y'), flow('y', 'x'), flow('x', 'y'));
+    expect(messages(noPathToEnd.check(p))).toEqual(['Task "Lead in": the loop starting here has no way out to an end event.']);
+  });
+
+  it('reports separate loops separately, and a loop nothing enters on its first node', () => {
+    const p = soundProcess();
+    p.nodes.push(
+      node('a', 'task', { name: 'A' }),
+      node('b', 'task', { name: 'B' }),
+      node('c', 'task', { name: 'C' }),
+      node('d', 'task', { name: 'D' }),
+    );
+    p.flows.push(flow('gw', 'b', { condition: 'tw.local.b' }), flow('a', 'b'), flow('b', 'a'), flow('c', 'd'), flow('d', 'c'));
+    expect(messages(noPathToEnd.check(p))).toEqual([
+      'Task "B": the loop starting here has no way out to an end event.',
+      'Task "C": the loop starting here has no way out to an end event.',
+    ]);
+  });
+
+  it('reports only the dead end of a loop that can leave to one', () => {
+    const p = soundProcess();
+    p.nodes.push(node('a', 'task', { name: 'A' }), node('b', 'task', { name: 'B' }), node('stop', 'task', { name: 'Stop' }));
+    p.flows.push(flow('gw', 'a', { condition: 'tw.local.a' }), flow('a', 'b'), flow('b', 'a'), flow('b', 'stop'));
+    expect(messages(noPathToEnd.check(p))).toEqual(['Task "Stop": the path ends here without reaching an end event.']);
+  });
+
+  it('leaves a chain into a gateway without outgoing flow to that rule', () => {
+    const p = soundProcess();
+    p.nodes.push(node('a', 'task', { name: 'A' }), node('dead', 'parallelGateway', { name: 'Join' }));
+    p.flows.push(flow('gw', 'a', { condition: 'tw.local.a' }), flow('a', 'dead'));
+    expect(messages(validateProcess(p))).toEqual(['Parallel gateway "Join" has no outgoing flow.']);
   });
 
   it('gives one warning for a process without an end event', () => {
@@ -211,7 +252,7 @@ describe('no-path-to-end', () => {
       node('e', 'endEvent', { parentId: 'sub' }),
     );
     p.flows.push(flow('work', 'sub'), flow('sub', 'end'), flow('s', 'x'), flow('x', 'e'), flow('s', 'y'));
-    expect(messages(validateProcess(p))).toEqual(['Task "Archive": no path from here reaches an end event.']);
+    expect(messages(validateProcess(p))).toEqual(['Task "Archive": the path ends here without reaching an end event.']);
   });
 
   it('does not count the end event of the process for a node inside a sub-process', () => {
@@ -222,9 +263,9 @@ describe('no-path-to-end', () => {
       node('x', 'task', { name: 'Inside', parentId: 'sub' }),
       node('e', 'endEvent', { parentId: 'sub' }),
     );
-    // x leaves the sub-process to the process's end; it never reaches e.
+    // x leaves the sub-process to the process's end: within its level, the path ends at x.
     p.flows.push(flow('work', 'sub'), flow('sub', 'end'), flow('s', 'e'), flow('x', 'end'), flow('s', 'x'));
-    expect(messages(noPathToEnd.check(p))).toEqual(['Task "Inside": no path from here reaches an end event.']);
+    expect(messages(noPathToEnd.check(p))).toEqual(['Task "Inside": the path ends here without reaching an end event.']);
   });
 
   it('skips a sub-process without an end event', () => {
@@ -244,7 +285,7 @@ describe('no-path-to-end', () => {
       node('lost', 'task'),
       node('dead', 'exclusiveGateway'),
       node('bnd', 'intermediateEvent', { attachedToId: 'work' }),
-      node('evsp', 'subProcess', { originalType: 'subProcess (event)' }),
+      node('evsp', 'subProcess', { triggeredByEvent: true }),
       node('es', 'startEvent', { parentId: 'evsp' }),
     );
     p.flows.push(flow('gw', 'dead', { condition: 'tw.local.dead' }), flow('es', 'es'));
@@ -281,15 +322,10 @@ describe('no-path-to-end', () => {
   </bpmn:process>
 </bpmn:definitions>`;
 
-    it('reports the branch that leaves the boundary and never reaches an end, not the boundary itself', async () => {
+    it('reports the end of the branch that leaves the boundary, not the boundary itself', async () => {
       const p = (await readBpmn(bpmn(false))).processes[0];
       expect(validateProcess(p)).toEqual([
-        {
-          ruleId: 'no-path-to-end',
-          severity: 'warning',
-          elementId: 'escalate',
-          message: 'Task "Escalate": no path from here reaches an end event.',
-        },
+        deadEnd('escalate', 'Task "Escalate": the path ends here without reaching an end event.'),
       ]);
     });
 
@@ -300,18 +336,75 @@ describe('no-path-to-end', () => {
   });
 });
 
+describe('a small Bob BPMN with an event sub-process', () => {
+  const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="d" targetNamespace="http://example.com">
+  <bpmn:process id="p" name="Event sub-process sample">
+    <bpmn:startEvent id="start" name="Start" />
+    <bpmn:task id="work" name="Work"><bpmn:documentation>Works.</bpmn:documentation></bpmn:task>
+    <bpmn:endEvent id="end" name="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="work" />
+    <bpmn:sequenceFlow id="f2" sourceRef="work" targetRef="end" />
+    <bpmn:subProcess id="evsp" name="On error" triggeredByEvent="true">
+      <bpmn:documentation>Handles errors.</bpmn:documentation>
+      <bpmn:startEvent id="es" name="Error"><bpmn:errorEventDefinition /></bpmn:startEvent>
+      <bpmn:task id="log" name="Log"><bpmn:documentation>Logs.</bpmn:documentation></bpmn:task>
+      <bpmn:endEvent id="ee" name="Logged" />
+      <bpmn:sequenceFlow id="f3" sourceRef="es" targetRef="log" />
+      <bpmn:sequenceFlow id="f4" sourceRef="log" targetRef="ee" />
+    </bpmn:subProcess>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+  it('marks the event sub-process and gives no warning', async () => {
+    const p = (await readBpmn(bpmn)).processes[0];
+    const evsp = p.nodes.find((n) => n.id === 'evsp')!;
+    expect(evsp).toMatchObject({ kind: 'subProcess', originalType: 'bpmn:SubProcess', triggeredByEvent: true });
+    expect(p.nodes.find((n) => n.id === 'work')!.triggeredByEvent).toBeUndefined();
+    expect(validateProcess(p)).toEqual([]);
+  });
+});
+
 describe('activity-without-documentation', () => {
-  it('reports empty and white-space-only documentation, and missing documentation', () => {
+  const tasks = (n: number) =>
+    Array.from({ length: n }, (_, i) => node(`t${i + 1}`, 'task', { name: String.fromCharCode(65 + i), documentation: undefined }));
+
+  it('reports empty, white-space-only and missing documentation in one line on the process', () => {
     const p = soundProcess();
     p.nodes.find((n) => n.id === 'work')!.documentation = '';
     p.nodes.find((n) => n.id === 'rework')!.documentation = '  \n\t ';
     p.nodes.push(node('calc', 'scriptTask', { name: 'Compute', documentation: undefined }));
     p.flows.push(flow('start', 'calc'), flow('calc', 'end'));
     expect(validateProcess(p)).toEqual([
-      { ruleId: 'activity-without-documentation', severity: 'warning', elementId: 'work', message: 'User task "Do work" has no documentation.' },
-      { ruleId: 'activity-without-documentation', severity: 'warning', elementId: 'rework', message: 'Script task "Rework" has no documentation.' },
-      { ruleId: 'activity-without-documentation', severity: 'warning', elementId: 'calc', message: 'Script task "Compute" has no documentation.' },
+      {
+        ruleId: 'activity-without-documentation',
+        severity: 'warning',
+        elementId: 'p',
+        message: '3 activities have no documentation: "Do work", "Rework", "Compute".',
+      },
     ]);
+  });
+
+  it('says "1 activity" for one', () => {
+    const p = process([node('decide', 'scriptTask', { name: 'Decide', documentation: '' })], []);
+    expect(messages(activityWithoutDocumentation.check(p))).toEqual(['1 activity has no documentation: "Decide".']);
+  });
+
+  it('lists eight names without "and more"', () => {
+    expect(messages(activityWithoutDocumentation.check(process(tasks(8), [])))).toEqual([
+      '8 activities have no documentation: "A", "B", "C", "D", "E", "F", "G", "H".',
+    ]);
+  });
+
+  it('lists the first eight of ten, in model order, and counts the rest', () => {
+    expect(messages(activityWithoutDocumentation.check(process(tasks(10), [])))).toEqual([
+      '10 activities have no documentation: "A", "B", "C", "D", "E", "F", "G", "H" and 2 more.',
+    ]);
+  });
+
+  it('names an activity without a name by its id', () => {
+    const p = process([node('t1', 'userTask', { name: '', documentation: undefined })], []);
+    expect(messages(activityWithoutDocumentation.check(p))).toEqual(['1 activity has no documentation: "t1".']);
   });
 
   it('checks every activity kind and leaves out events, gateways and unknown elements', () => {
@@ -333,48 +426,53 @@ describe('activity-without-documentation', () => {
     ];
     const p = process(kinds.map((k) => node(k, k, { documentation: undefined })), []);
     expect(messages(activityWithoutDocumentation.check(p))).toEqual([
-      'Task "task" has no documentation.',
-      'Script task "scriptTask" has no documentation.',
-      'User task "userTask" has no documentation.',
-      'Service task "serviceTask" has no documentation.',
-      'Call activity "callActivity" has no documentation.',
-      'Sub-process "subProcess" has no documentation.',
+      '6 activities have no documentation: "task", "scriptTask", "userTask", "serviceTask", "callActivity", "subProcess".',
     ]);
+  });
+
+  it('gives no warning when every activity is documented', () => {
+    expect(activityWithoutDocumentation.check(soundProcess())).toEqual([]);
   });
 });
 
 describe('the local BAW exports', () => {
-  const byRule = (issues: ValidationIssue[], ruleId: string) => issues.filter((i) => i.ruleId === ruleId);
-
   it.skipIf(!hasLocalTwx('orderDelivery'))('order-delivery round trip: no structural warning, every activity documented', async () => {
     const p = (await readTwxPackage(localTwx('orderDelivery'))).processes[0];
-    const issues = validateProcess(p);
-    expect(validateProcess(p, STRUCTURAL)).toEqual([]);
-    expect(byRule(issues, 'activity-without-documentation')).toEqual([]);
+    expect(validateProcess(p, [...STRUCTURAL, activityWithoutDocumentation])).toEqual([]);
   });
 
   it.skipIf(!hasLocalTwx('services'))('DemoChildProcess: one undocumented script task, no structural warning', async () => {
     const pkg = await readTwxPackage(localTwx('services'));
     const p = pkg.processes.find((x) => x.name === 'DemoChildProcess')!;
     expect(validateProcess(p, STRUCTURAL)).toEqual([]);
-    expect(messages(activityWithoutDocumentation.check(p))).toEqual(['Script task "Decide" has no documentation.']);
+    expect(messages(activityWithoutDocumentation.check(p))).toEqual(['1 activity has no documentation: "Decide".']);
   });
 
-  it.skipIf(!hasLocalTwx('services'))('Demo_MainProcess: ten undocumented activities; its End event is not connected', async () => {
+  it.skipIf(!hasLocalTwx('services'))('Demo_MainProcess: one documentation line, End disconnected, Timer 2 a dead end', async () => {
     const pkg = await readTwxPackage(localTwx('services'));
     const p = pkg.processes.find((x) => x.name === 'Demo_MainProcess')!;
-    expect(activityWithoutDocumentation.check(p)).toHaveLength(10);
     // The export itself has no flow into "End": the chain stops at "Timer 2".
-    // So End is disconnected, and no node above it reaches an end event.
-    expect(gatewayWithoutOutgoingFlow.check(p)).toEqual([]);
-    expect(messages(disconnectedNode.check(p))).toEqual(['End event "End" is not connected to any sequence flow.']);
-    const noPath = noPathToEnd.check(p);
-    expect(noPath).toHaveLength(14);
-    expect(messages(noPath)).toContain('Intermediate event "Timer 2": no path from here reaches an end event.');
+    expect(messages(validateProcess(p, [...STRUCTURAL, activityWithoutDocumentation]))).toEqual([
+      'End event "End" is not connected to any sequence flow.',
+      'Intermediate event "Timer 2": the path ends here without reaching an end event.',
+      expect.stringMatching(/^10 activities have no documentation: "Enter Customer", "Review Orders", .* and 2 more\.$/),
+    ]);
+  });
+
+  it.skipIf(!hasLocalTwx('services'))('MyFirstProcess: one documentation line for fourteen activities', async () => {
+    const pkg = await readTwxPackage(localTwx('services'));
+    const p = pkg.processes.find((x) => x.name === 'MyFirstProcess')!;
+    expect(validateProcess(p, STRUCTURAL)).toEqual([]);
+    expect(messages(activityWithoutDocumentation.check(p))).toEqual([
+      expect.stringMatching(/^14 activities have no documentation: .* and 6 more\.$/),
+    ]);
   });
 
   it.skipIf(!hasLocalTwx('activities'))('activities: boundary events and the event sub-process give no structural warning', async () => {
     const pkg = await readTwxPackage(localTwx('activities'));
+    expect(pkg.processes.flatMap((p) => p.nodes).filter((n) => n.triggeredByEvent).map((n) => n.name)).toEqual([
+      'Event subprocess',
+    ]);
     for (const p of pkg.processes) expect(validateProcess(p, STRUCTURAL)).toEqual([]);
   });
 });

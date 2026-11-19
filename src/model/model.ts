@@ -164,6 +164,8 @@ export interface FlowNode {
   laneId?: string;
   /** Id of the enclosing sub-process, if the node is nested. */
   parentId?: string;
+  /** Sub-processes only: true for an event sub-process (triggeredByEvent="true"). */
+  triggeredByEvent?: boolean;
   /** The service or process a call activity calls (TWX: calledElement="1.…" or "25.…"). */
   calledElement?: CalledElement;
   /** Diagram bounds, only when the source has them (a bpmndi section, the TWX diagram). */

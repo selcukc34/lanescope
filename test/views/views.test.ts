@@ -170,8 +170,8 @@ describe.skipIf(!REAL)('buildRenderMessage for a TWX', () => {
   });
 
   it('shows exactly the four unconditioned gateway flows and the empty lane in the Warnings tab', () => {
-    // BAW leaves activities undocumented; activity-without-documentation lists them on top.
-    expect(msg.warnings.filter((w) => !w.endsWith('has no documentation.'))).toHaveLength(5);
+    // BAW may leave activities undocumented; activity-without-documentation lists them in one line on top.
+    expect(msg.warnings.filter((w) => !w.includes(' no documentation:'))).toHaveLength(5);
     expect(msg.warnings).toContain('Lane Participant has no activities');
     expect(msg.warnings.filter((w) => w.startsWith('Exclusive gateway "Validation Passed?"'))).toHaveLength(1);
     expect(msg.warnings.filter((w) => w.startsWith('Exclusive gateway "Route Order"'))).toHaveLength(3);

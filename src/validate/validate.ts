@@ -89,13 +89,19 @@ export const disconnectedNode: ValidationRule = {
 };
 
 /**
- * A node from which no chain of sequence flows reaches an end event (a
- * dead end, or a loop without a way out). Each level is checked on its own:
- * nodes inside a sub-process must reach an end event of that sub-process.
- * A process without any end event gets one warning instead of one per node;
- * a sub-process without one is not checked (BPMN lets it end implicitly).
- * Disconnected nodes, gateways without outgoing flows, boundary events and
- * event sub-processes are left to the other rules or not checked.
+ * Where the flow gets stuck before an end event, reported once per
+ * problem, not once per node on the way there:
+ * - a dead end: a node that does not reach an end event and has no outgoing
+ *   flow within its level;
+ * - a loop without a way out: nodes that reach neither an end event nor a
+ *   dead end, grouped by the flows between them, one warning per group, on
+ *   the node where the group is entered.
+ * Each level is checked on its own: nodes inside a sub-process must reach an
+ * end event of that sub-process. A process without any end event gets one
+ * warning; a sub-process without one is not checked (BPMN lets it end
+ * implicitly). Disconnected nodes and gateways without outgoing flows are
+ * left to their own rules (a dead gateway still counts as a dead end for the
+ * nodes before it); boundary events and event sub-processes are not checked.
  */
 export const noPathToEnd: ValidationRule = {
   id: 'no-path-to-end',
@@ -124,31 +130,57 @@ export const noPathToEnd: ValidationRule = {
         }
         continue;
       }
-      // Walk back from the end events over the incoming flows of this level.
-      const reaches = new Set(ends.map((n) => n.id));
-      const queue = [...reaches];
-      const visit = (id: string) => {
-        const node = nodeById.get(id);
-        if (!node || node.parentId !== scope || reaches.has(id)) return;
-        reaches.add(id);
-        queue.push(id);
+      const inScope = (id: string) => nodeById.get(id)?.parentId === scope;
+      // Walk back over the incoming flows of this level from `seeds`.
+      const walkBack = (seeds: Iterable<string>, into: Set<string>) => {
+        const queue = [...seeds];
+        for (const id of queue) into.add(id);
+        while (queue.length > 0) {
+          const id = queue.pop()!;
+          const next = index.incoming(id).map((f) => f.sourceId);
+          // A boundary event that leads somewhere gives its host a way there too.
+          const host = nodeById.get(id)?.attachedToId;
+          if (host !== undefined) next.push(host);
+          for (const source of next) {
+            if (!inScope(source) || into.has(source)) continue;
+            into.add(source);
+            queue.push(source);
+          }
+        }
       };
-      while (queue.length > 0) {
-        const id = queue.pop()!;
-        for (const flow of index.incoming(id)) visit(flow.sourceId);
-        // A boundary event that leads to an end gives its host a way there too.
-        const node = nodeById.get(id);
-        if (node && node.attachedToId !== undefined) visit(node.attachedToId);
-      }
-      for (const node of nodes) {
-        if (reaches.has(node.id)) continue;
-        if (isBoundaryEvent(node) || isEventSubProcess(node)) continue;
-        if (isDisconnected(node, index) || isDeadGateway(node, index)) continue;
+      const reaches = new Set<string>();
+      walkBack(
+        ends.map((n) => n.id),
+        reaches,
+      );
+
+      const stuck = nodes.filter((n) => !reaches.has(n.id) && !isBoundaryEvent(n) && !isEventSubProcess(n));
+      const isDeadEnd = (n: FlowNode) => !index.outgoing(n.id).some((f) => inScope(f.targetId));
+      const deadEnds = stuck.filter((n) => !isDisconnected(n, index) && !isDeadGateway(n, index) && isDeadEnd(n));
+      for (const node of deadEnds) {
         issues.push({
           ruleId: 'no-path-to-end',
           severity: 'warning',
           elementId: node.id,
-          message: `${nodeLabel(node)}: no path from here reaches an end event.`,
+          message: `${nodeLabel(node)}: the path ends here without reaching an end event.`,
+        });
+      }
+
+      // What reaches neither an end event nor a dead end (or dead gateway) is caught in a loop.
+      const reachesDeadEnd = new Set<string>();
+      walkBack(
+        stuck.filter((n) => isDeadEnd(n) || isDeadGateway(n, index)).map((n) => n.id),
+        reachesDeadEnd,
+      );
+      const looping = stuck.filter((n) => !reachesDeadEnd.has(n.id) && !isDisconnected(n, index));
+      for (const group of connectedGroups(looping, index)) {
+        const members = new Set(group.map((n) => n.id));
+        const entry = group.find((n) => index.incoming(n.id).some((f) => !members.has(f.sourceId))) ?? group[0];
+        issues.push({
+          ruleId: 'no-path-to-end',
+          severity: 'warning',
+          elementId: entry.id,
+          message: `${nodeLabel(entry)}: the loop starting here has no way out to an end event.`,
         });
       }
     }
@@ -184,18 +216,31 @@ const DOCUMENTED_KINDS: ReadonlySet<FlowNodeKind> = new Set<FlowNodeKind>([
   'subProcess',
 ]);
 
-/** An activity whose documentation is empty or only white space. Events and gateways are not checked. */
+/** Names listed in the activity-without-documentation warning before "and N more". */
+const MAX_LISTED_ACTIVITIES = 8;
+
+/**
+ * Activities whose documentation is empty or only white space, in one
+ * warning per process (BAW exports often leave many undocumented). Events
+ * and gateways are not checked.
+ */
 export const activityWithoutDocumentation: ValidationRule = {
   id: 'activity-without-documentation',
   check(process) {
-    return process.nodes
-      .filter((n) => DOCUMENTED_KINDS.has(n.kind) && !n.documentation?.trim())
-      .map((node) => ({
+    const undocumented = process.nodes.filter((n) => DOCUMENTED_KINDS.has(n.kind) && !n.documentation?.trim());
+    if (undocumented.length === 0) return [];
+    const count = undocumented.length;
+    const names = undocumented.slice(0, MAX_LISTED_ACTIVITIES).map((n) => `"${n.name || n.id}"`);
+    const more = count - names.length;
+    const subject = count === 1 ? '1 activity has' : `${count} activities have`;
+    return [
+      {
         ruleId: 'activity-without-documentation',
-        severity: 'warning' as const,
-        elementId: node.id,
-        message: `${nodeLabel(node)} has no documentation.`,
-      }));
+        severity: 'warning',
+        elementId: process.id,
+        message: `${subject} no documentation: ${names.join(', ')}${more > 0 ? ` and ${more} more` : ''}.`,
+      },
+    ];
   },
 };
 
@@ -259,7 +304,32 @@ function isBoundaryEvent(node: FlowNode): boolean {
 }
 
 function isEventSubProcess(node: FlowNode): boolean {
-  return node.kind === 'subProcess' && node.originalType === 'subProcess (event)';
+  return node.kind === 'subProcess' && node.triggeredByEvent === true;
+}
+
+/** Splits `nodes` into groups connected by the flows between them (either direction), in model order. */
+function connectedGroups(nodes: FlowNode[], index: FlowIndex): FlowNode[][] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const seen = new Set<string>();
+  const groups: FlowNode[][] = [];
+  for (const start of nodes) {
+    if (seen.has(start.id)) continue;
+    seen.add(start.id);
+    const members = new Set([start.id]);
+    const queue = [start.id];
+    while (queue.length > 0) {
+      const id = queue.pop()!;
+      const neighbours = [...index.outgoing(id).map((f) => f.targetId), ...index.incoming(id).map((f) => f.sourceId)];
+      for (const next of neighbours) {
+        if (!byId.has(next) || seen.has(next)) continue;
+        seen.add(next);
+        members.add(next);
+        queue.push(next);
+      }
+    }
+    groups.push(nodes.filter((n) => members.has(n.id)));
+  }
+  return groups;
 }
 
 function isDisconnected(node: FlowNode, index: FlowIndex): boolean {
