@@ -9,7 +9,15 @@ import { readBpmnPackage } from '../../src/input/bpmnInput';
 import { readProcessPackage } from '../../src/bpmn/bpmnReader';
 import type { Process, ProcessPackage } from '../../src/model/model';
 import { readTwxPackage } from '../../src/twx/twxImport';
-import { checkExportTarget, defaultExportName, defaultExportPath, safeNamePart } from '../../src/views/exportFiles';
+import {
+  BPMN_EXPORT_COMMENT,
+  checkExportTarget,
+  chooseExportFolder,
+  defaultExportName,
+  defaultExportPath,
+  EXPORT_LABELS,
+  safeNamePart,
+} from '../../src/views/exportFiles';
 import { MAX_EXPORT_BYTES, parseWebviewMessage, type HostMessage, type RenderMessage } from '../../src/views/protocol';
 import { ViewerSession, type ExportHost, type ExportRequest } from '../../src/views/viewerSession';
 import { exportSvg, MAX_PNG_PIXELS, MAX_PNG_SIDE, pngScale, svgDataUrl, svgViewBox } from '../../webview/exportSvg';
@@ -63,6 +71,31 @@ describe('exportFiles', () => {
     expect(await defaultExportPath({ sourcePath: zip, format: 'bpmn' }, (p) => bpmnTaken.has(p))).toBe(
       path.join(dir, 'order-delivery-process-2.laid-out.bpmn'),
     );
+  });
+
+  it('opens the save dialog in the last export folder while it exists, else next to the source', () => {
+    const desktop = path.join(path.sep, 'Users', 'someone', 'Desktop');
+    expect(chooseExportFolder(undefined, false, dir)).toBe(dir);
+    expect(chooseExportFolder(desktop, true, dir)).toBe(desktop);
+    // The last folder was deleted.
+    expect(chooseExportFolder(desktop, false, dir)).toBe(dir);
+  });
+
+  it('checks for name clashes in the chosen folder, keeping the name', async () => {
+    const desktop = path.join(path.sep, 'Users', 'someone', 'Desktop');
+    const taken = new Set([path.join(desktop, 'order-delivery-process.svg'), path.join(dir, 'order-delivery-process-2.svg')]);
+    expect(await defaultExportPath({ sourcePath: zip, format: 'svg' }, (p) => taken.has(p), desktop)).toBe(
+      path.join(desktop, 'order-delivery-process-2.svg'),
+    );
+    expect(await defaultExportPath({ sourcePath: zip, format: 'bpmn', levelName: 'Price Order' }, () => false, desktop)).toBe(
+      path.join(desktop, 'order-delivery-process-Price-Order.laid-out.bpmn'),
+    );
+    // The opened file is still refused when the dialog opens next to it.
+    expect(checkExportTarget(zip, zip, 'png').ok).toBe(false);
+  });
+
+  it('says that the BPMN export holds no scripts', () => {
+    expect(EXPORT_LABELS.bpmn).toBe('BPMN with layout, no scripts (.bpmn)');
   });
 
   it('never suggests the opened file itself', async () => {
@@ -224,6 +257,9 @@ describe('ViewerSession.exportBpmn: Bob zip', () => {
     // …the export keeps them.
     const { xml, levelName } = await s.exportBpmn();
     expect(levelName).toBeUndefined();
+    // The note comes right after the XML declaration.
+    expect(xml.split('\n').slice(0, 2)).toEqual(['<?xml version="1.0" encoding="UTF-8"?>', BPMN_EXPORT_COMMENT]);
+    expect(xml.match(/<!--/g)).toHaveLength(1);
     const exported = await readBack(xml);
     expect(exported.flowNames).toContain('To Validate Order SF');
     expect(exported.flowNames).toEqual(process.flows.map((f) => f.name).filter(Boolean));

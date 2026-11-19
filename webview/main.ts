@@ -82,13 +82,13 @@ const updated = h('span', { class: 'updated muted', hidden: '' });
 const exportButton = button('Export', 'Export the diagram to a new file');
 exportButton.setAttribute('aria-haspopup', 'menu');
 exportButton.setAttribute('aria-expanded', 'false');
-const EXPORT_ITEMS: Array<{ format: ExportFormat; text: string }> = [
-  { format: 'bpmn', text: 'BPMN with layout (.bpmn)' },
+const EXPORT_ITEMS: Array<{ format: ExportFormat; text: string; tooltip?: string }> = [
+  { format: 'bpmn', text: 'BPMN with layout, no scripts (.bpmn)', tooltip: 'Diagram and layout only. Script code is never exported.' },
   { format: 'svg', text: 'SVG image (.svg)' },
   { format: 'png', text: 'PNG image (.png)' },
 ];
-const exportItems = EXPORT_ITEMS.map(({ format, text }) => {
-  const item = h('button', { type: 'button', class: 'menu-item', role: 'menuitem', tabindex: '-1' }, text);
+const exportItems = EXPORT_ITEMS.map(({ format, text, tooltip }) => {
+  const item = h('button', { type: 'button', class: 'menu-item', role: 'menuitem', tabindex: '-1', ...(tooltip ? { title: tooltip } : {}) }, text);
   item.addEventListener('click', () => {
     closeExportMenu(true);
     vscode.postMessage({ type: 'exportRequest', format });

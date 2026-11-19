@@ -9,7 +9,14 @@ import * as vscode from 'vscode';
 import { readBpmnPackage } from '../input/bpmnInput';
 import { readProcessPackage } from '../bpmn/bpmnReader';
 import { readTwxPackage } from '../twx/twxImport';
-import { checkExportTarget, defaultExportPath, EXPORT_EXTENSIONS, EXPORT_LABELS } from './exportFiles';
+import {
+  BPMN_EXPORT_NOTE,
+  checkExportTarget,
+  chooseExportFolder,
+  defaultExportPath,
+  EXPORT_EXTENSIONS,
+  EXPORT_LABELS,
+} from './exportFiles';
 import { EXPORT_FORMATS, type ExportFormat, type HostMessage, type ViewerSettings } from './protocol';
 import { ViewerSession, type ExportHost } from './viewerSession';
 import { isWatchedChange, watchPatternFor } from './watchPattern';
@@ -18,13 +25,15 @@ import { buildWebviewHtml, createNonce } from './webviewHtml';
 export const VIEW_TYPE = 'lanescope.processViewer';
 export const OPEN_COMMAND = 'lanescope.open';
 export const EXPORT_COMMAND = 'lanescope.export';
+/** Memento key of the folder the last export was written to. */
+const LAST_EXPORT_FOLDER_KEY = 'lanescope.lastExportFolder';
 export const CONFIG_SECTION = 'lanescope';
 
 const SUPPORTED = new Set(['.bpmn', '.zip', '.twx']);
 
 export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvider {
   static register(context: vscode.ExtensionContext): vscode.Disposable {
-    const provider = new ProcessEditorProvider(context.extensionUri);
+    const provider = new ProcessEditorProvider(context);
     return vscode.Disposable.from(
       vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
         supportsMultipleEditorsPerDocument: true,
@@ -37,7 +46,16 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
   /** Session of every open viewer panel. */
   private readonly sessions = new Map<vscode.WebviewPanel, ViewerSession>();
 
-  private constructor(private readonly extensionUri: vscode.Uri) {}
+  private readonly extensionUri: vscode.Uri;
+
+  private constructor(private readonly context: vscode.ExtensionContext) {
+    this.extensionUri = context.extensionUri;
+  }
+
+  /** Where the last export folder is kept: the workspace's state, or the global state without a workspace. */
+  private exportState(): vscode.Memento {
+    return vscode.workspace.workspaceFolders?.length ? this.context.workspaceState : this.context.globalState;
+  }
 
   /** Lanescope: Export Diagram…: asks for the format and exports the active viewer's diagram. */
   private async exportActive(): Promise<void> {
@@ -47,7 +65,11 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       return;
     }
     const picked = await vscode.window.showQuickPick(
-      EXPORT_FORMATS.map((format) => ({ label: EXPORT_LABELS[format], format })),
+      EXPORT_FORMATS.map((format) => ({
+        label: EXPORT_LABELS[format],
+        format,
+        ...(format === 'bpmn' ? { detail: BPMN_EXPORT_NOTE } : {}),
+      })),
       { title: 'Export Diagram', placeHolder: 'Export the shown diagram to a new file as' },
     );
     if (!picked) return;
@@ -71,7 +93,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       load: () => loadPackage(document.uri),
       post: (message: HostMessage) => webview.postMessage(message),
       settings: readSettings(),
-      exporter: exportHost(document.uri),
+      exporter: exportHost(document.uri, () => this.exportState()),
     });
     this.sessions.set(panel, session);
     // Listen before setting the HTML so the webview's "ready" is never missed.
@@ -105,14 +127,20 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
  * path is checked (checkExportTarget) before anything is written; the opened
  * file and its package are never written.
  */
-function exportHost(source: vscode.Uri): ExportHost {
+function exportHost(source: vscode.Uri, state: () => vscode.Memento): ExportHost {
   return {
     async chooseTarget({ format, levelName }) {
       if (source.scheme !== 'file') {
         void vscode.window.showErrorMessage('Only diagrams of local files can be exported.');
         return undefined;
       }
-      const suggested = await defaultExportPath({ sourcePath: source.fsPath, format, levelName }, fileExists);
+      const lastFolder = state().get<string>(LAST_EXPORT_FOLDER_KEY);
+      const folder = chooseExportFolder(
+        lastFolder,
+        lastFolder !== undefined && (await isFolder(lastFolder)),
+        path.dirname(source.fsPath),
+      );
+      const suggested = await defaultExportPath({ sourcePath: source.fsPath, format, levelName }, fileExists, folder);
       const picked = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.file(suggested),
         filters: { [EXPORT_LABELS[format]]: [EXPORT_EXTENSIONS[format].slice(1)] },
@@ -133,6 +161,8 @@ function exportHost(source: vscode.Uri): ExportHost {
       const uri = vscode.Uri.file(target);
       // The only write of the extension: a new export file, never an input (see chooseTarget).
       await vscode.workspace.fs.writeFile(uri, bytes);
+      // Only a written export moves the save dialog's folder; a cancel or a refused path does not.
+      await state().update(LAST_EXPORT_FOLDER_KEY, path.dirname(target));
       void showExported(uri, format);
     },
     failed(message) {
@@ -150,6 +180,14 @@ async function showExported(uri: vscode.Uri, format: ExportFormat): Promise<void
   } else if (choice === 'Reveal in Explorer') {
     const inWorkspace = vscode.workspace.getWorkspaceFolder(uri) !== undefined;
     await vscode.commands.executeCommand(inWorkspace ? 'revealInExplorer' : 'revealFileInOS', uri);
+  }
+}
+
+async function isFolder(folder: string): Promise<boolean> {
+  try {
+    return ((await vscode.workspace.fs.stat(vscode.Uri.file(folder))).type & vscode.FileType.Directory) !== 0;
+  } catch {
+    return false;
   }
 }
 

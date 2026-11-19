@@ -41,6 +41,7 @@
 // write is asked (ExportHost) before anything is drawn.
 
 import { toDiagramXml } from '../bpmn/toDiagramXml';
+import { BPMN_EXPORT_COMMENT } from './exportFiles';
 import type { Process, ProcessPackage } from '../model/model';
 import { MAX_PATH_DEPTH, openInPath, resolvePath } from './navigation';
 import {
@@ -333,7 +334,7 @@ export class ViewerSession {
     const { xml } = await toDiagramXml(process, EXPORT_DIAGRAM_OPTIONS);
     // toDiagramXml writes no script; this keeps it that way.
     if (SCRIPT_ELEMENT.test(xml)) throw new Error('The export would contain script text.');
-    return { xml, ...(good.below.length > 0 ? { levelName: process.name || process.id } : {}) };
+    return { xml: withExportComment(xml), ...(good.below.length > 0 ? { levelName: process.name || process.id } : {}) };
   }
 
   private async writeExport(target: string, format: ExportFormat, bytes: Uint8Array): Promise<void> {
@@ -488,6 +489,14 @@ export class ViewerSession {
   private post(message: HostMessage): void {
     if (this.webviewReady && !this.disposed) this.deps.post(message);
   }
+}
+
+/** The XML with BPMN_EXPORT_COMMENT after its XML declaration (at the top when it has none). */
+function withExportComment(xml: string): string {
+  const declaration = /^<\?xml[^>]*\?>\r?\n?/.exec(xml);
+  const end = declaration ? declaration[0].length : 0;
+  const head = declaration ? `${declaration[0].trimEnd()}\n` : '';
+  return `${head}${BPMN_EXPORT_COMMENT}\n${xml.slice(end)}`;
 }
 
 function errorText(err: unknown): string {

@@ -1,10 +1,12 @@
 // File names and target checks for exports. Pure (no vscode), so the rules
 // that keep exports away from the opened input are unit-tested.
 //
-// An export always goes to a new file next to the opened one, named after
-// it: <source>[-<level>].<ext>, and <source>[-<level>].laid-out.bpmn for the
+// An export always goes to a new file, named after the opened one:
+// <source>[-<level>].<ext>, and <source>[-<level>].laid-out.bpmn for the
 // BPMN. The level name is added only when a level below the chosen process
-// is drawn (an opened service flow or linked process). A target that is the
+// is drawn (an opened service flow or linked process). The save dialog opens
+// in the folder of the last export while it exists, else next to the opened
+// file (chooseExportFolder). A target that is the
 // input itself, an input type (.twx, .zip, .xsd) or not of the export's type
 // is refused.
 
@@ -20,10 +22,16 @@ export const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
 
 /** Labels for the save dialog's filter and the format pickers. */
 export const EXPORT_LABELS: Record<ExportFormat, string> = {
-  bpmn: 'BPMN with layout (.bpmn)',
+  bpmn: 'BPMN with layout, no scripts (.bpmn)',
   svg: 'SVG image (.svg)',
   png: 'PNG image (.png)',
 };
+
+/** What a BPMN export holds, for its tooltip and picker detail. */
+export const BPMN_EXPORT_NOTE = 'Diagram and layout only. Script code is never exported.';
+
+/** XML comment at the top of an exported BPMN file (after the XML declaration). */
+export const BPMN_EXPORT_COMMENT = '<!-- Exported by Lanescope: diagram and layout only. Script code is not included. -->';
 
 /** Extensions of the files Lanescope reads; an export never writes one. */
 const INPUT_EXTENSIONS = new Set(['.twx', '.zip', '.xsd']);
@@ -74,14 +82,24 @@ export function defaultExportName(naming: ExportNaming): string {
 }
 
 /**
- * The default path: next to the opened file, with -2, -3, … added when a file
- * of that name exists. Never the opened file itself.
+ * Folder the save dialog opens in: the folder of the last export when there
+ * is one and it still exists, else the folder of the opened file.
+ */
+export function chooseExportFolder(lastFolder: string | undefined, lastFolderExists: boolean, sourceFolder: string): string {
+  return lastFolder !== undefined && lastFolderExists ? lastFolder : sourceFolder;
+}
+
+/**
+ * The default path: in `folder` (by default next to the opened file), with
+ * -2, -3, … added when a file of that name exists there. Never the opened
+ * file itself.
  */
 export async function defaultExportPath(
   naming: ExportNaming,
   exists: (filePath: string) => boolean | Promise<boolean>,
+  folder: string = path.dirname(naming.sourcePath),
 ): Promise<string> {
-  const dir = path.dirname(naming.sourcePath);
+  const dir = folder;
   const stem = exportStem(naming);
   const tail = exportTail(naming.format);
   for (let n = 1; n <= MAX_SUFFIX; n++) {

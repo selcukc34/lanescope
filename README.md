@@ -107,14 +107,14 @@ The viewer only shows what is in the file. It does not judge, score or rewrite a
 
 | Format | What you get |
 | --- | --- |
-| **BPMN with layout** (`.bpmn`) | BPMN 2.0 XML with diagram interchange: the layout the viewer computed is stored as coordinates, so other BPMN tools (and Lanescope) draw it as shown. |
+| **BPMN with layout, no scripts** (`.bpmn`) | BPMN 2.0 XML with diagram interchange: the layout the viewer computed is stored as coordinates, so other BPMN tools (and Lanescope) draw it as shown. |
 | **SVG image** (`.svg`) | The diagram as a vector image. |
 | **PNG image** (`.png`) | The diagram at twice its size, scaled down for very large diagrams (at most 16384 pixels a side and 64 megapixels). |
 
-- A save dialog asks where to save. The suggested name is next to the opened file: `<file>.laid-out.bpmn`, `<file>.svg` or `<file>.png`, with the name of an opened service flow or linked process added (`<file>-<level>.svg`), and `-2`, `-3`, … when that name is taken.
+- A save dialog asks where to save. It opens in the folder of the last export (while that folder exists), else next to the opened file. The suggested name is `<file>.laid-out.bpmn`, `<file>.svg` or `<file>.png`, with the name of an opened service flow or linked process added (`<file>-<level>.svg`), and `-2`, `-3`, … when that name is taken.
 - An export always goes to a new file. The opened file and the files of its package are never written: the save dialog refuses the opened file itself, any `.twx`, `.zip` or `.xsd` file, and a file with another extension than the format's.
 - Exports hold every flow name and every lane: the toolbar toggles change only what the viewer shows. Gateway conditions and documentation (as plain text) are kept.
-- Exports never contain script code: script tasks are exported without their script.
+- The BPMN export is a diagram and layout export, not a complete process to import back into BAW. Script code is never included, in any format: script tasks are exported without their script.
 - Images are drawn in light colours (white fill, black lines, on a white background) whatever the VS Code theme.
 - For a `.twx` export, ids that are not valid XML ids are replaced by safe ids (as in the viewer); the original BAW ids are not in the exported BPMN.
 
