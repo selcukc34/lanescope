@@ -235,6 +235,7 @@ function mapNode(el: ModdleElement, parentId: string | undefined): FlowNode {
     outputs: [],
   };
   if (parentId) node.parentId = parentId;
+  if (node.kind === 'subProcess' && el.triggeredByEvent === true) node.triggeredByEvent = true;
 
   const doc = documentation(el);
   if (doc !== undefined) node.documentation = doc;

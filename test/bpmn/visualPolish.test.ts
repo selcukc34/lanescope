@@ -38,7 +38,7 @@ const EMPTY_LANE_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
       <bpmn:lane id="laneC" name="System"><bpmn:flowNodeRef>end</bpmn:flowNodeRef></bpmn:lane>
     </bpmn:laneSet>
     <bpmn:startEvent id="start" name="Start" />
-    <bpmn:userTask id="work" name="Do work" />
+    <bpmn:userTask id="work" name="Do work"><bpmn:documentation>Does the work.</bpmn:documentation></bpmn:userTask>
     <bpmn:endEvent id="end" name="End" />
     <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="work" />
     <bpmn:sequenceFlow id="f2" sourceRef="work" targetRef="end" />

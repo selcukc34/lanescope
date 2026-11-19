@@ -95,7 +95,7 @@ describe('gateway-unconditioned-flow', () => {
           flow('f5', 'g', 'b', { condition: 'tw.local.x > 1' }),
         ],
       );
-      expect(validateProcess(p)).toEqual([]);
+      expect(validateProcess(p, [gatewayUnconditionedFlow])).toEqual([]);
     });
   });
 });

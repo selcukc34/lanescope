@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Four structural validation rules in the Warnings tab: `gateway-without-outgoing-flow`, `disconnected-node`, `no-path-to-end` and `activity-without-documentation`. `no-path-to-end` reports where the flow gets stuck (a dead end, or once per loop without a way out), and `activity-without-documentation` gives one line per process. Like the existing rules, they only report; nothing is changed. They run on processes only, not on service diagrams.
+
 ## 0.3.2 — 2026-11-19
 
 ### Security
