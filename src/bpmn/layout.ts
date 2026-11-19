@@ -11,10 +11,10 @@
 // If pass 2 pushes a node out of its band, the positions from step 2 are kept
 // and flows are routed with a simple orthogonal router instead.
 
-import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkEdgeSection, ElkExtendedEdge, ElkNode, ElkPort, LayoutOptions as ElkOptions } from 'elkjs/lib/elk-api';
 import type { Bounds, Flow, FlowNode, FlowNodeKind, PortLocation, Process } from '../model/model';
-import { freePort, routeBetweenPorts } from './orthogonalRouter';
+import { ELK_TIMEOUT_MS, ElkLayoutError, runElkLayout } from './elkRunner';
+import { createRouteBudget, freePort, routeBetweenPorts, type RouteBudget } from './orthogonalRouter';
 
 export interface Point {
   x: number;
@@ -32,6 +32,8 @@ export interface LayoutOptions {
    * process. Default: true.
    */
   hideEmptyLanes?: boolean;
+  /** Longest one ELK pass may take, in milliseconds. Default: ELK_TIMEOUT_MS. */
+  elkTimeoutMs?: number;
 }
 
 export interface LaneLayout {
@@ -68,6 +70,23 @@ type Geometry = Omit<ProcessLayout, 'flowLabels' | 'hiddenNodeIds' | 'hiddenFlow
 
 /** Id of the lane added for nodes without a lane. */
 export const UNASSIGNED_LANE_ID = 'bobViewer_unassignedLane';
+
+/**
+ * Most nodes and flows one diagram may draw. Layout time grows with the
+ * size; at these limits a diagram is still laid out in seconds. A larger one
+ * (a crafted file can hold hundreds of thousands) is refused with a readable
+ * message instead of keeping the extension host busy.
+ */
+export const MAX_DIAGRAM_NODES = 5_000;
+export const MAX_DIAGRAM_FLOWS = 20_000;
+
+/** Raised when a diagram is over MAX_DIAGRAM_NODES or MAX_DIAGRAM_FLOWS; the message is meant for users. */
+export class DiagramTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DiagramTooLargeError';
+  }
+}
 
 export const TASK_SIZE = { width: 100, height: 80 };
 export const EVENT_SIZE = { width: 36, height: 36 };
@@ -272,16 +291,24 @@ export async function layoutProcess(process: Process, options: LayoutOptions = {
     if (node.parentId !== undefined) hiddenNodeIds.add(node.id);
   }
   const collapsed = new Map<string, number>();
+  const topOf = new Map<string, string>();
   for (const id of hiddenNodeIds) {
-    const top = topAncestor(id, parentOf);
+    const top = topAncestor(id, parentOf, topOf);
     collapsed.set(top, (collapsed.get(top) ?? 0) + 1);
   }
+  const nameOf = new Map(process.nodes.map((n) => [n.id, n.name]));
   for (const [id, count] of collapsed) {
-    const name = process.nodes.find((n) => n.id === id)?.name ?? id;
+    const name = nameOf.get(id) ?? id;
     warnings.push(`Sub-process "${name}" is drawn collapsed; its ${count} inner node(s) are not shown.`);
   }
 
   const nodes = process.nodes.filter((n) => !hiddenNodeIds.has(n.id));
+  const diagramName = process.name || process.id;
+  if (nodes.length > MAX_DIAGRAM_NODES) {
+    throw new DiagramTooLargeError(
+      `"${diagramName}" has ${nodes.length} nodes to draw; Lanescope draws diagrams of up to ${MAX_DIAGRAM_NODES} nodes.`,
+    );
+  }
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const hiddenFlowIds = new Set<string>();
   const flows: Flow[] = [];
@@ -294,6 +321,12 @@ export async function layoutProcess(process: Process, options: LayoutOptions = {
     } else {
       flows.push(flow);
     }
+  }
+
+  if (flows.length > MAX_DIAGRAM_FLOWS) {
+    throw new DiagramTooLargeError(
+      `"${diagramName}" has ${flows.length} sequence flows to draw; Lanescope draws diagrams of up to ${MAX_DIAGRAM_FLOWS} flows.`,
+    );
   }
 
   const flowLabels = new Map<string, string>();
@@ -325,21 +358,36 @@ export async function layoutProcess(process: Process, options: LayoutOptions = {
         `Only ${withBounds} of ${nodes.length} nodes have diagram bounds; the whole diagram was laid out again.`,
       );
     }
-    result = await layoutWithElk(bands, graph, warnings);
+    result = await layoutWithElk(bands, graph, warnings, options.elkTimeoutMs ?? ELK_TIMEOUT_MS);
   }
   return { ...result, flowLabels, hiddenNodeIds, hiddenFlowIds, warnings };
 }
 
-function topAncestor(id: string, parentOf: Map<string, string | undefined>): string {
-  let current = id;
+/** The outermost ancestor of a node; `memo` caches answers, so deep nesting stays linear. */
+function topAncestor(id: string, parentOf: Map<string, string | undefined>, memo: Map<string, string>): string {
+  const chain: string[] = [];
   const seen = new Set<string>();
-  while (!seen.has(current)) {
+  let current = id;
+  let top: string | undefined;
+  while (top === undefined) {
+    const known = memo.get(current);
+    if (known !== undefined) {
+      top = known;
+      break;
+    }
+    // A cycle of parents ends where it closes.
+    if (seen.has(current)) {
+      top = current;
+      break;
+    }
     seen.add(current);
+    chain.push(current);
     const parent = parentOf.get(current);
-    if (parent === undefined || !parentOf.has(parent)) return current;
-    current = parent;
+    if (parent === undefined || !parentOf.has(parent)) top = current;
+    else current = parent;
   }
-  return current;
+  for (const c of chain) memo.set(c, top);
+  return top;
 }
 
 function buildBands(process: Process, nodes: FlowNode[], hideEmpty: boolean, warnings: string[]): Band[] {
@@ -375,12 +423,11 @@ function buildBands(process: Process, nodes: FlowNode[], hideEmpty: boolean, war
 // ---------------------------------------------------------------------------
 // ELK layout
 
-async function layoutWithElk(bands: Band[], graph: Graph, warnings: string[]): Promise<Geometry> {
-  const elk = new ELK();
+async function layoutWithElk(bands: Band[], graph: Graph, warnings: string[], timeoutMs: number): Promise<Geometry> {
   const { nodes, flows, nodeById, sizes } = graph;
 
   // Pass 1: free layout for horizontal and in-layer order.
-  const free = await elk.layout(elkGraph(graph, FREE_OPTIONS));
+  const free = await runElk(elkGraph(graph, FREE_OPTIONS), graph, timeoutMs);
   const freePos = new Map((free.children ?? []).map((c) => [c.id, { x: c.x ?? 0, y: c.y ?? 0 }]));
 
   // Horizontal extent a node takes in its row, including its external label.
@@ -477,7 +524,7 @@ async function layoutWithElk(bands: Band[], graph: Graph, warnings: string[]): P
   });
 
   // Pass 2: route flows and place their labels with the planned positions.
-  const fixed = await elk.layout(elkGraph(graph, INTERACTIVE_OPTIONS, planned));
+  const fixed = await runElk(elkGraph(graph, INTERACTIVE_OPTIONS, planned), graph, timeoutMs);
   let shapes = new Map<string, Bounds>();
   let edges = new Map<string, Point[]>();
   let edgeLabels = new Map<string, Bounds>();
@@ -503,7 +550,7 @@ async function layoutWithElk(bands: Band[], graph: Graph, warnings: string[]): P
   if (!bandBounds) {
     warnings.push('Flow routing moved nodes out of their lanes; flows were routed with a simple router instead.');
     shapes = new Map(planned);
-    edges = routeAll(flows, shapes);
+    edges = routeAll(flows, shapes, warnings);
     edgeLabels = new Map();
     bandBounds = laneBounds;
   }
@@ -535,6 +582,27 @@ function fitBands(
     top = bottom;
   }
   return out;
+}
+
+/**
+ * Runs one ELK pass in the layout worker (./elkRunner), which stops it after
+ * `timeoutMs`. ELK's running time has no bound: a large, densely cyclic graph
+ * can keep it busy for minutes or overflow its stack. Either is reported as a
+ * readable DiagramTooLargeError.
+ */
+async function runElk(input: ElkNode, graph: Graph, timeoutMs: number): Promise<ElkNode> {
+  try {
+    return await runElkLayout(input, timeoutMs);
+  } catch (err) {
+    const size = `(${graph.nodes.length} nodes, ${graph.flows.length} flows)`;
+    if (err instanceof ElkLayoutError && err.reason === 'timeout') {
+      throw new DiagramTooLargeError(`"${graph.poolName}" ${size} could not be laid out within ${timeoutMs / 1000} seconds.`);
+    }
+    if (err instanceof ElkLayoutError && err.reason === 'stack') {
+      throw new DiagramTooLargeError(`"${graph.poolName}" ${size} is too large or too densely connected to lay out.`);
+    }
+    throw err;
+  }
 }
 
 function elkGraph(graph: Graph, layoutOptions: ElkOptions, positions?: Map<string, Bounds>): ElkNode {
@@ -680,7 +748,7 @@ function mostCommon(values: number[]): number {
 
 function layoutFromBounds(bands: Band[], graph: Graph, warnings: string[]): Geometry {
   const shapes = new Map(graph.nodes.map((n) => [n.id, { ...n.bounds! }]));
-  const edges = routeAll(graph.flows, shapes);
+  const edges = routeAll(graph.flows, shapes, warnings);
 
   // The source's own lane bands (TWX: the BAW lane heights), when they fit.
   const fromSource = sourceLaneBounds(bands, shapes);
@@ -741,9 +809,20 @@ function sourceLaneBounds(
 const DEFAULT_SOURCE_PORT: PortLocation = { side: 'right', offset: 0.5 };
 const DEFAULT_TARGET_PORT: PortLocation = { side: 'left', offset: 0.5 };
 
-function routeAll(flows: Flow[], shapes: Map<string, Bounds>): Map<string, Point[]> {
+/**
+ * Routes every flow. Flows with ports from the source diagram are routed
+ * around the nodes, within one RouteBudget for the whole diagram; when it
+ * runs out, the remaining flows get the simple route and a warning says so.
+ */
+function routeAll(
+  flows: Flow[],
+  shapes: Map<string, Bounds>,
+  warnings: string[],
+  budget: RouteBudget = createRouteBudget(),
+): Map<string, Point[]> {
   const edges = new Map<string, Point[]>();
   const obstacles = [...shapes.values()];
+  let simplified = 0;
   for (const f of flows) {
     const s = shapes.get(f.sourceId)!;
     const t = shapes.get(f.targetId)!;
@@ -756,9 +835,16 @@ function routeAll(flows: Flow[], shapes: Map<string, Bounds>): Map<string, Point
             t,
             freePort(t, f.targetPort ?? DEFAULT_TARGET_PORT, obstacles),
             obstacles,
+            budget,
           )
         : undefined;
+    if (!routed && budget.remaining <= 0 && (f.sourcePort || f.targetPort)) simplified++;
     edges.set(f.id, routed ?? route(s, t));
+  }
+  if (simplified > 0) {
+    warnings.push(
+      `The diagram is too large to route every flow around the nodes; ${simplified} flow(s) are drawn with simple routes.`,
+    );
   }
   return edges;
 }

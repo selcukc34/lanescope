@@ -3,15 +3,27 @@
 // readers turn it into plain text here, before anything reaches the webview.
 // Text that is not HTML (Bob output, most BAW fields) is returned unchanged.
 
+// Documentation comes from untrusted files, so every pattern here runs in
+// linear time: no tag pattern can run past the next "<", and blocks that are
+// dropped with their content are found with indexOf, not a lazy regex that
+// would rescan the rest of the text for every unclosed opening tag.
+
 /** An HTML comment or a tag HTML documentation uses. "amount < 1000" is neither. */
 const LOOKS_LIKE_HTML =
-  /<!--|<\/?(?:html|head|body|style|script|meta|title|p|br|hr|div|span|font|b|i|u|s|em|strong|small|big|sub|sup|ul|ol|li|dl|dt|dd|h[1-6]|a|img|table|thead|tbody|tfoot|tr|td|th|caption|blockquote|pre|code|center)\b[^>]*>/i;
+  /<!--|<\/?(?:html|head|body|style|script|meta|title|p|br|hr|div|span|font|b|i|u|s|em|strong|small|big|sub|sup|ul|ol|li|dl|dt|dd|h[1-6]|a|img|table|thead|tbody|tfoot|tr|td|th|caption|blockquote|pre|code|center)\b[^<>]*>/i;
 
-const DROPPED_WITH_CONTENT = /<(style|script|head)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+/** Elements dropped together with their content, and their end tags. */
+const DROPPED_OPEN = /<(style|script|head)\b[^<>]*>/gi;
+const DROPPED_CLOSE: Readonly<Record<string, RegExp>> = {
+  style: /<\/style/gi,
+  script: /<\/script/gi,
+  head: /<\/head/gi,
+};
 const COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
-const LINE_BREAK = /<br\b[^>]*>|<\/(?:p|div|li|h[1-6])\s*>/gi;
-const LIST_ITEM = /<li\b[^>]*>/gi;
-const ANY_TAG = /<\/?[a-z][^>]*>|<![^>]*>|<\?[^>]*>/gi;
+const LINE_BREAK = /<br\b[^<>]*>|<\/(?:p|div|li|h[1-6])\s*>/gi;
+const LIST_ITEM = /<li\b[^<>]*>/gi;
+/** A tag; quoted attribute values may hold ">" (onerror="a>b"), so they are matched whole. */
+const ANY_TAG = /<\/?[a-z](?:[^<>"']|"[^<"]*"|'[^<']*')*>|<![^<>]*>|<\?[^<>]*>/gi;
 const ENTITY = /&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g;
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
@@ -34,9 +46,7 @@ const NAMED_ENTITIES: Readonly<Record<string, string>> = {
 export function htmlToPlainText(s: string): string {
   if (!LOOKS_LIKE_HTML.test(s)) return s;
   return (
-    s
-      .replace(COMMENT, '')
-      .replace(DROPPED_WITH_CONTENT, '')
+    dropBlocks(s.replace(COMMENT, ''))
       // Source line breaks are plain white space in HTML.
       .replace(/\s+/g, ' ')
       .replace(LINE_BREAK, '\n')
@@ -49,6 +59,28 @@ export function htmlToPlainText(s: string): string {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
   );
+}
+
+/**
+ * Removes style, script and head elements with their content. An element
+ * that is never closed runs to the end of the text, as in a browser.
+ */
+function dropBlocks(s: string): string {
+  let out = '';
+  let from = 0;
+  DROPPED_OPEN.lastIndex = 0;
+  for (let m = DROPPED_OPEN.exec(s); m; m = DROPPED_OPEN.exec(s)) {
+    out += s.slice(from, m.index);
+    const closeTag = DROPPED_CLOSE[m[1].toLowerCase()];
+    closeTag.lastIndex = DROPPED_OPEN.lastIndex;
+    const close = closeTag.exec(s);
+    if (!close) return out;
+    const end = s.indexOf('>', close.index);
+    if (end < 0) return out;
+    from = end + 1;
+    DROPPED_OPEN.lastIndex = from;
+  }
+  return out + s.slice(from);
 }
 
 function decodeEntity(whole: string, name: string): string {

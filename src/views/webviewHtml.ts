@@ -11,7 +11,11 @@ export interface WebviewHtmlParams {
   title: string;
 }
 
-/** Strict CSP: only the bundled script (by nonce) and bundled styles; no network. */
+/**
+ * Strict CSP: only the bundled script (by nonce) and bundled styles; no
+ * network. base-uri and form-action do not fall back to default-src, so they
+ * are closed explicitly.
+ */
 export function buildCsp(cspSource: string, nonce: string): string {
   return [
     "default-src 'none'",
@@ -19,6 +23,8 @@ export function buildCsp(cspSource: string, nonce: string): string {
     `style-src ${cspSource}`,
     `img-src ${cspSource} data:`,
     `font-src ${cspSource}`,
+    "base-uri 'none'",
+    "form-action 'none'",
   ].join('; ');
 }
 

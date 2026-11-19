@@ -1,7 +1,9 @@
 // Builds two bundles:
 //   dist/extension.js       - extension host code (Node, CommonJS)
 //   dist/webview/main.js    - webview UI (browser, IIFE)
-import { rmSync } from 'node:fs';
+// and copies dist/elk.bundled.js, which the layout worker loads
+// (src/bpmn/elkRunner.ts runs ELK in a worker thread, with a time limit).
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import * as esbuild from 'esbuild';
 
 const production = process.argv.includes('--production');
@@ -25,7 +27,8 @@ const configs = [
     platform: 'node',
     format: 'cjs',
     target: 'node18',
-    external: ['vscode'],
+    // elk.bundled.js is copied next to the bundle and loaded by the layout worker.
+    external: ['vscode', 'elkjs/lib/elk.bundled.js'],
   },
   {
     ...common,
@@ -42,6 +45,9 @@ const configs = [
 if (production) {
   rmSync('dist', { recursive: true, force: true });
 }
+
+mkdirSync('dist', { recursive: true });
+copyFileSync('node_modules/elkjs/lib/elk.bundled.js', 'dist/elk.bundled.js');
 
 if (watch) {
   const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));
