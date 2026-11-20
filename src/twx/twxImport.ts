@@ -5,6 +5,7 @@
 // (./calleeDiagrams). Of the packed toolkits only package.xml is read, and
 // only to name the coach views that controls use.
 
+import { DoctypeError, doctypeOpenErrorMessage, doctypeSkippedWarning, hasDoctype } from '../input/xmlGuard';
 import type { ProcessPackage, Process } from '../model/model';
 import { readBpd } from './bpdReader';
 import { TwxCalleeDiagrams } from './calleeDiagrams';
@@ -30,6 +31,18 @@ export async function twxToProcessPackage(archive: TwxArchive): Promise<ProcessP
   }
   const resolver = new TwxResolver(archive.objects, info, archive.lazy);
 
+  // Objects rejected for a DOCTYPE, by name (from package.xml) and path; their content is never parsed or quoted.
+  const label = (id: string) => {
+    const name = info?.objects.get(id)?.name;
+    return name ? `"${name}" (objects/${id}.xml)` : `objects/${id}.xml`;
+  };
+  const rejectedBpds: string[] = [];
+  const rejectedOthers: string[] = [];
+  for (const [id, xml] of archive.objects) {
+    // BPDs are checked below, where a DOCTYPE in the embedded BPMN2 model is found as well.
+    if (!id.startsWith('25.') && hasDoctype(xml)) rejectedOthers.push(label(id));
+  }
+
   const processes: Process[] = [];
   for (const [id, xml] of archive.objects) {
     if (!id.startsWith('25.')) continue;
@@ -37,10 +50,13 @@ export async function twxToProcessPackage(archive: TwxArchive): Promise<ProcessP
     try {
       result = readBpd(xml, resolver, (other) => archive.objects.get(other));
     } catch (err) {
-      warnings.push(`Cannot read objects/${id}.xml: ${(err as Error).message}`);
+      if (err instanceof DoctypeError) rejectedBpds.push(label(id));
+      else warnings.push(`Cannot read objects/${id}.xml: ${(err as Error).message}`);
       continue;
     }
-    if (result.kind === 'process') {
+    if (result.kind === 'rejected') {
+      rejectedBpds.push(label(id));
+    } else if (result.kind === 'process') {
       processes.push(result.process);
       warnings.push(...result.warnings);
     } else if (result.kind === 'skipped') {
@@ -48,9 +64,14 @@ export async function twxToProcessPackage(archive: TwxArchive): Promise<ProcessP
     }
     // Embedded (event) subprocess objects are drawn inside their parent BPD.
   }
+  if (processes.length === 0 && rejectedBpds.length > 0) {
+    throw new TwxReadError(doctypeOpenErrorMessage(rejectedBpds));
+  }
   if (processes.length === 0) {
     throw new TwxReadError('The TWX export does not contain a business process definition (BPD) with a diagram.');
   }
+  const rejected = [...rejectedBpds, ...rejectedOthers];
+  if (rejected.length > 0) warnings.push(doctypeSkippedWarning(rejected, 'object'));
   await resolver.resolveControlTypes(resolver.readInternals());
   warnings.push(...resolver.warnings);
   processes.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));

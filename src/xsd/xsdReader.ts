@@ -3,7 +3,7 @@
 // complexContent extension, attributes and annotation/documentation.
 
 import { XMLParser } from 'fast-xml-parser';
-import { DOCTYPE_MESSAGE, hasDoctype } from '../input/xmlGuard';
+import { assertNoDoctype } from '../input/xmlGuard';
 import type { DataField, DataType } from '../model/model';
 
 type XsdNode = Record<string, unknown>;
@@ -32,7 +32,7 @@ const parser = new XMLParser({
 
 /** Parses one XSD document and returns its named complex types (and elements with anonymous types). */
 export function readXsd(xml: string): DataType[] {
-  if (hasDoctype(xml)) throw new Error(DOCTYPE_MESSAGE);
+  assertNoDoctype(xml);
   const doc = parser.parse(xml) as XsdNode;
   const schema = doc.schema as XsdNode | undefined;
   if (!schema || typeof schema !== 'object') {

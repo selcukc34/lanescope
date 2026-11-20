@@ -15,7 +15,7 @@ import type {
   ProcessPackage,
 } from '../model/model';
 import type { BpmnPackageInput } from '../input/bpmnInput';
-import { DOCTYPE_MESSAGE, hasDoctype } from '../input/xmlGuard';
+import { assertNoDoctype, DOCTYPE_MESSAGE, DoctypeError, doctypeOpenErrorMessage, doctypeSkippedWarning, hasDoctype } from '../input/xmlGuard';
 import { htmlToPlainText } from '../model/plainText';
 import { readXsd } from '../xsd/xsdReader';
 
@@ -70,17 +70,25 @@ export interface BpmnReadResult {
 
 /** Reads a whole Bob package (BPMN + XSDs) into the shared model. */
 export async function readProcessPackage(input: BpmnPackageInput): Promise<ProcessPackage> {
+  // Only the file name (or zip entry path) goes into the message, never content.
+  if (hasDoctype(input.bpmnText)) throw new DoctypeError(doctypeOpenErrorMessage([input.bpmnFileName]));
   const bpmn = await readBpmn(input.bpmnText);
   const warnings = [...bpmn.warnings];
   const dataTypes = [];
   const xsdNames = Object.keys(input.xsdFiles);
+  const rejectedXsds: string[] = [];
 
   for (const name of xsdNames) {
     try {
       dataTypes.push(...readXsd(input.xsdFiles[name]));
     } catch (err) {
-      warnings.push(`Cannot read XSD "${name}": ${(err as Error).message}`);
+      if (err instanceof DoctypeError) rejectedXsds.push(name);
+      else warnings.push(`Cannot read XSD "${name}": ${(err as Error).message}`);
     }
+  }
+  if (rejectedXsds.length > 0) {
+    const from = rejectedXsds.length === 1 ? 'it' : 'them';
+    warnings.push(doctypeSkippedWarning(rejectedXsds, 'XSD file', `; business objects from ${from} are not shown`));
   }
   for (const location of bpmn.xsdImports) {
     if (!xsdNames.some((n) => sameFile(n, location, input.bpmnFileName))) {
@@ -107,7 +115,7 @@ export async function readProcessPackage(input: BpmnPackageInput): Promise<Proce
 /** Parses BPMN XML and maps every bpmn:process onto the shared model. */
 export async function readBpmn(xml: string): Promise<BpmnReadResult> {
   // Checked before bpmn-moddle and the raw scan below parse the text.
-  if (hasDoctype(xml)) throw new Error(`Invalid BPMN: ${DOCTYPE_MESSAGE}`);
+  assertNoDoctype(xml, `Invalid BPMN: ${DOCTYPE_MESSAGE}`);
   const moddle = BpmnModdle({ icp: icpDescriptor });
   let result;
   try {
