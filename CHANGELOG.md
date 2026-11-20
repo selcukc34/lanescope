@@ -20,7 +20,7 @@
   - New toolbar toggle **Highlight changes** marks added and changed elements in the diagram. A click (or Enter) on a row in the list selects the element, scrolls it into view and shows its details.
   - The new command **Lanescope: Clear Comparison** (or **Clear** in the tab) goes back to comparing with the previous version.
   - Script code and mapped values are never shown, the picked file is only read, and exports hold no change marks. Processes only, not service diagrams.
-- **Sub-processes open as a diagram of their own**, like called services: **Open sub-process** in the details panel (with **Contains**: the number of nodes inside), a double-click on the sub-process, or a click on its drill-down arrow opens its inside one level below, with the breadcrumb (**… › Sub1**).
+- **Sub-processes open as a diagram of their own**, like called services: **Open sub-process** in the details panel (with **Contains**: the number of nodes inside), a double-click on the sub-process, or selecting it and clicking its drill-down arrow opens its inside one level below, with the breadcrumb (**… › Sub1**).
   - Event sub-processes open the same way, and a nested sub-process opens as one more level. An empty sub-process says **Empty sub-process**.
   - The inside is drawn with the sub-process's own lanes: in a `.twx` export those of BAW's sub-process diagram (names, order, heights) with its positions; in Bob output a `bpmn:laneSet` inside the `bpmn:subProcess`, laid out automatically.
   - `empty-lane` also reports the empty lanes of a sub-process (`Lane "X" in sub-process "Sub1" has no activities.`). The "is drawn collapsed; its N inner node(s) are not shown" warning is gone.

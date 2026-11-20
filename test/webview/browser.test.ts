@@ -315,32 +315,58 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       errors: window.__errors,
     })`);
     expect(after).toEqual({ selected: [checkId], details: 'Check Stock', errors: [] });
+    // Selected from the Changes tab: its drill-down arrow shows.
+    expect(
+      await page.eval<string[]>(
+        `[...document.querySelectorAll('.ls-drilldown')].filter((b) => getComputedStyle(b).display !== 'none').map((b) => b.closest('.djs-overlays').getAttribute('data-container-id'))`,
+      ),
+    ).toEqual([checkId]);
   });
 
-  it('puts our drill-down arrow on a sub-process that opens; a click opens its level and the canvas stays', async () => {
+  it('shows our drill-down arrow only on the selected sub-process that opens; a click opens its level and the canvas stays', async () => {
     expect(drillRender.elements.prepare).toMatchObject({ openCallee: 'sub:prepare' });
     expect(drillRender.elements.empty).toMatchObject({ openUnavailable: 'Empty sub-process' });
     await page.open(url, drillRender);
-    // Selected, the empty sub-process would show bpmn-js's arrow (bjs-drilldown-empty).
-    await page.eval(`document.querySelector('[data-element-id="empty"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
-    const shown = `({
-      arrows: [...document.querySelectorAll('.bjs-drilldown')].map((b) => [b.closest('.djs-overlays').getAttribute('data-container-id'), b.classList.contains('ls-drilldown'), b.title]),
+    const state = `({
+      arrows: [...document.querySelectorAll('.bjs-drilldown')]
+        .filter((b) => getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().width > 0)
+        .map((b) => [b.closest('.djs-overlays').getAttribute('data-container-id'), b.classList.contains('ls-drilldown'), b.title]),
       breadcrumbs: document.querySelectorAll('.bjs-breadcrumbs').length,
-      drawn: [...document.querySelectorAll('.djs-element')].filter((e) => e.getBoundingClientRect().width > 0).length,
       start: document.querySelector('[data-element-id="start"]').getBoundingClientRect().width > 0,
-      errors: window.__errors,
+      details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
     })`;
-    const before = await page.eval<{ arrows: unknown[]; breadcrumbs: number; drawn: number; start: boolean; errors: string[] }>(shown);
-    expect(before.arrows).toEqual([['prepare', true, 'Open Prepare']]);
-    expect(before.breadcrumbs).toBe(0);
-    expect(before.start).toBe(true);
+    type State = { arrows: unknown[]; breadcrumbs: number; start: boolean; details: string };
+    const ARROW = ['prepare', true, 'Open Prepare'];
 
+    // Nothing selected: no arrow; no breadcrumb of bpmn-js.
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [], breadcrumbs: 0, start: true });
+    // The sub-process selected: its arrow, and only that one.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [ARROW], details: 'Prepare' });
+    // Another element: gone. The empty sub-process: none.
+    await page.clickSelector('[data-element-id="start"] .djs-hit');
+    expect((await page.eval<State>(state)).arrows).toEqual([]);
+    await page.clickSelector('[data-element-id="empty"] .djs-hit');
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [], details: 'Empty' });
+    // The empty canvas: gone.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    const box = await page.eval<{ x: number; y: number }>(`(() => { const r = document.querySelector('.canvas').getBoundingClientRect(); return { x: r.x + 4, y: r.bottom - 4 }; })()`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await page.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    }
+    expect((await page.eval<State>(state)).arrows).toEqual([]);
+
+    // A re-render that keeps the selection (a toggle) keeps the arrow on it.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...drillRender, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [ARROW], details: 'Prepare' });
+
+    // A click on the arrow opens the level, as a double-click does; the canvas stays on the process.
     await page.eval('window.__posted.length = 0');
     await page.clickSelector('.ls-drilldown');
     expect(await page.eval<unknown[]>('window.__posted')).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
-    // Still the process: no plane of bpmn-js, no breadcrumb of its own.
-    const after = await page.eval<typeof before>(shown);
-    expect(after).toEqual({ ...before, errors: [] });
+    expect(await page.eval<State>(state)).toMatchObject({ breadcrumbs: 0, start: true });
+    expect(await page.eval<string[]>('window.__errors')).toEqual([]);
   });
 
   it('keeps the drill-down arrows out of an exported image', async () => {

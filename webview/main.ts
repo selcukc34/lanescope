@@ -269,11 +269,14 @@ async function render(msg: RenderMessage): Promise<void> {
       canvas().zoom('fit-viewport');
     }
     markChanges(msg);
-    // The arrow on a sub-process opens its level, like a double-click.
+    // The arrow on a sub-process opens its level, like a double-click; it shows while the sub-process is selected.
     addDrilldownArrows(viewer, msg.elements, openCallee);
     // On the same level the selected element is kept while its id exists; another level starts
     // with the selection it had when it was left, or none.
     panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });
+    // The diagram selects the same element again (its drill-down arrow with it).
+    const kept = panel.selection !== undefined ? viewer.get<ElementRegistry>('elementRegistry').get(panel.selection) : undefined;
+    if (kept) viewer.get<Selection>('selection').select(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
     overlay.hidden = true;
@@ -474,6 +477,7 @@ document.addEventListener('keydown', (e) => {
   } else if (currentPath().length > 1) {
     if (!backButton.disabled) goBack();
   } else {
+    viewer.get<Selection>('selection').select(null);
     panel.select(undefined);
   }
   e.preventDefault();

@@ -5,9 +5,11 @@
 // the sub-process, which the diagram Lanescope sends does not fill, and
 // draws a breadcrumb of its own. Both services are replaced with ones that
 // do nothing. Instead the viewer puts the same arrow on every sub-process
-// that opens as a level (NodeDetails.openCallee), and a click on it opens
-// that level, as a double-click or "Open sub-process" does. A guard keeps
-// the canvas on the root it was imported with.
+// that opens as a level (NodeDetails.openCallee), shown only while that
+// sub-process is selected (main.css: diagram-js marks the overlay container
+// of a selected element "selected"), and a click on it opens that level, as
+// a double-click or "Open sub-process" does. A guard keeps the canvas on the
+// root it was imported with.
 
 import type NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
 import type Canvas from 'diagram-js/lib/core/Canvas';
