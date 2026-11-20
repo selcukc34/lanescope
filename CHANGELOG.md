@@ -4,10 +4,13 @@
 
 ### Added
 
-- **Description traceability:** a new **Trace** tab checks the shown process against the Markdown description it was built from (for example Bob's `<name>-description.md`) and lists, row by row, what is matched (✓), a near match (≈, e.g. "matched as 'Validate Order SF'"), missing (✗), not checked (?) and extra in the process (+). Steps, gateway paths, business object fields and human task fields are compared by name, from the description's headings and lists; the logic of the process is not checked. No AI, no network.
+- **Description traceability:** a new **Trace** tab checks the shown process against the Markdown description it was built from (for example Bob's `<name>-description.md`) and lists, row by row, what is found exactly (✓), a near match (≈, e.g. "matched as 'Validate Order SF'"), missing (✗), unchecked (?) and extra in the process (+). Steps, gateway paths, business object fields and human task fields are compared by name; the logic of the process is not checked. No AI, no network.
+  - The summary counts what the process can answer: "24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra". The tab title counts missing items only ("Trace (2)").
   - A description next to the opened file (`<name>-description.md` or `<name>.md`) is attached automatically; the setting `lanescope.trace.autoDetectDescription` (default `true`) turns this off.
   - **Lanescope: Check Against Description…** picks a description and opens the tab; **Lanescope: Clear Description Check** or **Clear** in the tab removes it. The choice is remembered per file; the description is watched and the check runs again when it or the process changes.
   - A row selects its node or flow (opening the sub-process it is in) and shows its details. The diagram is not marked; the comparison, the warnings and the exports are not affected.
+- **Lanescope description format:** the README defines the format the check reads: `## Main process steps` (required), `## Gateway paths` ("after &lt;step&gt;" in a sentence, or one `### After <step>` per gateway), `## Business object` (`<Name>:` or `### <Name>`, several allowed) and `## Human tasks` (`### <task>`). Every other heading is free text. A description with none of these sections shows one notice line instead of rows. The README also has a paragraph to add to a prompt that asks IBM Bob to write the description in this format.
+- **Lanescope: New Process Description** (Command Palette, editor **…** menu): writes `<name>-description.md` next to the opened file from a fixed template, opens it beside the diagram and attaches it. It only creates a new file; when the file exists, it offers to open it and never overwrites it.
 
 ### Fixed
 

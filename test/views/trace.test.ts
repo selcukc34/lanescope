@@ -10,7 +10,8 @@ import { readBpmnPackage } from '../../src/input/bpmnInput';
 import { readProcessPackage } from '../../src/bpmn/bpmnReader';
 import type { ProcessPackage } from '../../src/model/model';
 import { parseWebviewMessage, type HostMessage, type RenderMessage } from '../../src/views/protocol';
-import { ViewerSession, type Timers } from '../../src/views/viewerSession';
+import { NO_STEPS_NOTICE, ViewerSession, type Timers } from '../../src/views/viewerSession';
+import { checkNewDescriptionTarget, newDescriptionPath } from '../../src/views/descriptionFiles';
 import { descriptionCandidates } from '../../src/views/watchPattern';
 import { V1_ZIP, V2_ZIP } from '../bobV2';
 
@@ -93,7 +94,7 @@ describe('description check in the session', () => {
     await t.s.setDescription(MD_PATH);
     const trace = t.last().trace!;
     expect(trace.fileName).toBe('order-delivery-process-description.md');
-    expect(trace.summary).toBe('19 of 41 matched · 5 near · 0 missing · 17 unchecked · 1 extra');
+    expect(trace.summary).toBe('24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra');
     expect(trace.rows).toHaveLength(42);
     expect(t.last().showTrace).toBeUndefined();
     expect(t.last().preserveView).toBe(true);
@@ -107,7 +108,7 @@ describe('description check in the session', () => {
     await t.s.setDescription(MD_PATH);
     await t.s.handleMessage({ type: 'ready' });
     expect(t.renders()).toBe(1);
-    expect(t.last().trace?.summary).toMatch(/^19 of 41 matched/);
+    expect(t.last().trace?.summary).toMatch(/^24 of 24 checkable items found/);
   });
 
   it('a picked description shows the Trace tab once; a reloaded webview gets the render without the flag', async () => {
@@ -170,9 +171,30 @@ describe('description check in the session', () => {
 
   it('reports a description larger than 1 MB as an error', async () => {
     const t = await opened(v1);
-    t.files[MD_PATH] = `## Steps\n${'- x\n'.repeat(300_000)}`;
+    t.files[MD_PATH] = `## Main process steps\n${'- x\n'.repeat(300_000)}`;
     await t.s.setDescription(MD_PATH);
     expect(t.last().trace?.error).toMatch(/larger than 1 MB/);
+  });
+
+  it('a description without any section of the format: one notice, no rows, no error', async () => {
+    const t = await opened(v1);
+    t.files[MD_PATH] = '# Orders\n\nThe customer orders and we deliver.\n\n## Notes\n\nNothing else.\n';
+    await t.s.setDescription(MD_PATH);
+    expect(t.last().trace).toEqual({
+      fileName: 'order-delivery-process-description.md',
+      summary: '',
+      counts: { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, checkable: 0 },
+      rows: [],
+      notChecked: ['Notes'],
+      notice: 'No checkable sections found in order-delivery-process-description.md. Lanescope reads the Lanescope description format, see the README.',
+    });
+  });
+
+  it('a description without Main process steps says so above its rows', async () => {
+    const t = await opened(v1);
+    t.files[MD_PATH] = '## Business object\n\nOrderRequest:\n\n- orderId\n';
+    await t.s.setDescription(MD_PATH);
+    expect(t.last().trace).toMatchObject({ summary: '1 of 1 checkable items found (1 exact, 0 near) · 0 missing · 0 unchecked · 10 extra', notice: NO_STEPS_NOTICE });
   });
 
   it('Clear from the webview removes the check and tells the host', async () => {
@@ -211,5 +233,20 @@ describe('descriptionCandidates', () => {
       path.join('/work', 'order-delivery-process.md'),
     ]);
     expect(descriptionCandidates('/work/app.twx')).toEqual([path.join('/work', 'app-description.md'), path.join('/work', 'app.md')]);
+  });
+});
+
+describe('new description target', () => {
+  it('is <base>-description.md next to the opened file', () => {
+    expect(newDescriptionPath('/work/order-delivery-process.zip')).toBe(path.join('/work', 'order-delivery-process-description.md'));
+    expect(newDescriptionPath('/work/app.twx')).toBe(path.join('/work', 'app-description.md'));
+  });
+
+  it('is never the opened file or an input type, and always a .md file', () => {
+    expect(checkNewDescriptionTarget('/work/a-description.md', '/work/a.zip')).toEqual({ ok: true, path: path.resolve('/work/a-description.md') });
+    for (const bad of ['/work/a.zip', '/work/b.bpmn', '/work/b.twx', '/work/b.xsd', '/work/b.BPMN']) {
+      expect(checkNewDescriptionTarget(bad, '/work/a.zip').ok).toBe(false);
+    }
+    expect(checkNewDescriptionTarget('/work/a.txt', '/work/a.zip')).toEqual({ ok: false, message: 'A description is a .md file.' });
   });
 });

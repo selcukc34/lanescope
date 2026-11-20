@@ -1,10 +1,8 @@
-# Order Delivery Process
+# Order Delivery Process Description
 
 ## Business scenario
 
-A customer submits an order. The order is validated, enriched with country
-information from an external REST service, routed by business rules and
-completed through one of four paths.
+A customer submits an order. The order is validated, enriched with country information, routed based on business rules, and then completed through one of several paths.
 
 ## Main process steps
 
@@ -20,25 +18,33 @@ completed through one of four paths.
 
 ## Validation rules
 
-- customerId is mandatory.
-- amount must be greater than zero.
-- countryCode is mandatory.
-- If any rule fails, route is set to EXCEPTION and decisionReason explains why.
+The process validates the order data:
+
+- customerId is mandatory
+- amount must be greater than zero
+- countryCode is mandatory
+
+If validation fails, the process should route to EXCEPTION.
 
 ## Country lookup
 
-Call the public country info REST API with countryCode. On success, set
-countryName and countryRegion. On failure, set route to EXCEPTION and
-externalErrorMessage.
+The process calls a country information service using countryCode.
+
+The service returns:
+
+- countryName
+- countryRegion
+
+If the lookup fails, the process should route to EXCEPTION.
 
 ## Routing rules
 
-Apply in priority order:
+After country lookup, the process determines the route:
 
-1. If the country lookup failed, route = EXCEPTION.
-2. If amount > 10000, route = MANAGER_APPROVAL.
-3. If countryRegion is not Europe, route = COMPLIANCE_REVIEW.
-4. Otherwise, route = AUTO_APPROVE.
+- if country lookup fails, route to EXCEPTION
+- if amount is greater than 10000, route to MANAGER_APPROVAL
+- if countryRegion is not Europe, route to COMPLIANCE_REVIEW
+- otherwise route to AUTO_APPROVE
 
 ## Gateway paths
 
@@ -69,7 +75,9 @@ OrderRequest:
 
 ### Manager Approval
 
-The Order Manager reviews:
+Used when route is MANAGER_APPROVAL.
+
+The manager reviews:
 
 - orderId
 - customerId
@@ -80,7 +88,9 @@ The Order Manager reviews:
 
 ### Compliance Review
 
-The Compliance Reviewer reviews:
+Used when route is COMPLIANCE_REVIEW.
+
+The compliance reviewer reviews:
 
 - orderId
 - customerId
@@ -91,7 +101,9 @@ The Compliance Reviewer reviews:
 
 ### Handle Exception
 
-The Operations Team reviews:
+Used when route is EXCEPTION.
+
+The user reviews:
 
 - orderId
 - customerId
@@ -101,6 +113,4 @@ The Operations Team reviews:
 
 ## Expected output
 
-A BAW process with lanes for Customer, System, Order Manager, Compliance
-Reviewer and Operations Team, a business object OrderRequest and the four
-completion paths above.
+Generate a BPMN 2.0 draft suitable for IBM BAW import or further refinement.

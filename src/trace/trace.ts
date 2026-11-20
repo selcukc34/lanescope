@@ -42,13 +42,17 @@ export interface TraceCounts {
   missing: number;
   unchecked: number;
   extra: number;
-  /** Rows that come from the description (everything but extra). */
-  described: number;
+  /** Rows the process can answer: matched + near + missing (not unchecked, not extra). */
+  checkable: number;
 }
 
 export interface TraceResult {
   rows: TraceRow[];
   counts: TraceCounts;
+  /** False when the description has none of the checked sections: nothing to check at all. */
+  hasSections: boolean;
+  /** False when the description has no Main process steps section (no extra activities or gateways then). */
+  hasSteps: boolean;
   /** Headings of the sections that are not checked. */
   notChecked: string[];
 }
@@ -182,7 +186,8 @@ function nearNote(level: MatchLevel, what: string, name: string): string {
  */
 export function checkTrace(description: ProcessDescription, pkg: ProcessPackage, process: Process | undefined = pkg.processes[0]): TraceResult {
   const rows: TraceRow[] = [];
-  if (!process) return { rows, counts: countRows(rows), notChecked: [...description.notChecked] };
+  const flags = { hasSections: description.sections.length > 0, hasSteps: description.sections.includes('steps') };
+  if (!process) return { rows, counts: countRows(rows), ...flags, notChecked: [...description.notChecked] };
 
   /** Nodes that a step or a gateway path group stands for: not extra. */
   const described = new Set<string>();
@@ -192,8 +197,7 @@ export function checkTrace(description: ProcessDescription, pkg: ProcessPackage,
   for (const task of description.humanTasks) rows.push(...taskRows(task, process));
 
   // Extra: top-level activities and gateways nothing in the description stands for.
-  const hasSteps = description.steps.some((g) => g.steps.length > 0);
-  if (hasSteps) {
+  if (description.steps.some((g) => g.steps.length > 0)) {
     for (const n of process.nodes) {
       if (n.parentId !== undefined || described.has(n.id) || !(isActivity(n) || isGateway(n))) continue;
       rows.push({
@@ -206,7 +210,7 @@ export function checkTrace(description: ProcessDescription, pkg: ProcessPackage,
       });
     }
   }
-  return { rows, counts: countRows(rows), notChecked: [...description.notChecked] };
+  return { rows, counts: countRows(rows), ...flags, notChecked: [...description.notChecked] };
 }
 
 /** Steps: each takes one node, best level first over all steps, so an exact match is never taken by a looser one. */
@@ -295,9 +299,6 @@ function gatewayRows(group: GatewayPathGroup, process: Process, described: Set<s
     } else {
       why = `no step is named '${group.after}'`;
     }
-  } else if (group.gateway !== undefined && group.gateway !== '') {
-    gateway = findNode(gateways, group.gateway)?.node;
-    if (!gateway) why = `no gateway is named '${group.gateway}'`;
   } else {
     // No gateway named: the one whose outgoing flows carry the most path names.
     let best = 0;
@@ -311,7 +312,7 @@ function gatewayRows(group: GatewayPathGroup, process: Process, described: Set<s
     if (!gateway) why = 'no gateway has an outgoing flow with this name';
   }
 
-  const title = group.after !== undefined ? `${group.section} · after ${group.after}` : group.gateway ? `${group.section} · ${group.gateway}` : group.section;
+  const title = group.after !== undefined ? `${group.section} · after ${group.after}` : group.section;
   if (!gateway) {
     return group.paths.map((p) => ({ kind: 'gateway-path', group: title, text: p.text, status: 'missing', line: p.line, note: why }));
   }
@@ -359,30 +360,16 @@ function rankPath(m: { level: MatchLevel; by: 'name' | 'condition' }): number {
   return (m.by === 'name' ? 0 : 2) + (m.level === 'exact' ? 0 : 1);
 }
 
-/** The data type the description means: by name, else (no name) the one with the most matching fields. */
+/** The data type the description names: the same name, else the same normalised name. */
 function findDataType(bo: DescribedBusinessObject, types: readonly DataType[]): DataType | undefined {
-  if (bo.name !== undefined) {
-    const name = bo.name;
-    return types.find((t) => t.name === name) ?? types.find((t) => normalizeName(t.name) === normalizeName(name));
-  }
-  let best: DataType | undefined;
-  let bestHits = 0;
-  for (const t of types) {
-    const hits = bo.fields.filter((f) => t.fields.some((x) => matchesAt('normalized', f.text, x.name))).length;
-    if (hits > bestHits) {
-      best = t;
-      bestHits = hits;
-    }
-  }
-  return best;
+  return types.find((t) => t.name === bo.name) ?? types.find((t) => normalizeName(t.name) === normalizeName(bo.name));
 }
 
 function businessObjectRows(bo: DescribedBusinessObject, types: readonly DataType[]): TraceRow[] {
   const type = findDataType(bo, types);
-  const name = bo.name ?? type?.name;
-  const group = name !== undefined ? `${bo.section} · ${name}` : bo.section;
+  const group = `${bo.section} · ${bo.name}`;
   if (!type) {
-    const note = bo.name !== undefined ? `the process has no business object '${bo.name}'` : 'no business object of the process has these fields';
+    const note = `the process has no business object '${bo.name}'`;
     return bo.fields.map((f) => ({ kind: 'bo-field', group, text: f.text, status: 'missing', line: f.line, note }));
   }
   const { rows, extra } = matchFields(bo.fields, type.fields.map((f) => f.name));
@@ -486,15 +473,17 @@ function taskRows(task: DescribedHumanTask, process: Process): TraceRow[] {
 }
 
 function countRows(rows: readonly TraceRow[]): TraceCounts {
-  const counts: TraceCounts = { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, described: 0 };
-  for (const r of rows) {
-    counts[r.status]++;
-    if (r.status !== 'extra') counts.described++;
-  }
+  const counts: TraceCounts = { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, checkable: 0 };
+  for (const r of rows) counts[r.status]++;
+  counts.checkable = counts.matched + counts.near + counts.missing;
   return counts;
 }
 
-/** "19 of 41 matched · 5 near · 0 missing · 17 unchecked · 1 extra" */
+/**
+ * "24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra".
+ * Unchecked rows are not counted as checkable: the process cannot answer them.
+ */
 export function traceSummary(counts: TraceCounts): string {
-  return `${counts.matched} of ${counts.described} matched · ${counts.near} near · ${counts.missing} missing · ${counts.unchecked} unchecked · ${counts.extra} extra`;
+  const found = counts.matched + counts.near;
+  return `${found} of ${counts.checkable} checkable items found (${counts.matched} exact, ${counts.near} near) · ${counts.missing} missing · ${counts.unchecked} unchecked · ${counts.extra} extra`;
 }

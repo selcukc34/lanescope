@@ -95,6 +95,10 @@
       {
         "command": "lanescope.clearDescription",
         "title": "Lanescope: Clear Description Check"
+      },
+      {
+        "command": "lanescope.newDescription",
+        "title": "Lanescope: New Process Description"
       }
     ],
     "menus": {
@@ -128,6 +132,10 @@
         {
           "command": "lanescope.clearDescription",
           "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.newDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer"
         }
       ],
       "editor/title": [
@@ -140,6 +148,11 @@
           "command": "lanescope.checkDescription",
           "when": "activeCustomEditorId == lanescope.processViewer",
           "group": "1_lanescope@2"
+        },
+        {
+          "command": "lanescope.newDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer",
+          "group": "1_lanescope@3"
         }
       ]
     }

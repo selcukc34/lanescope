@@ -171,11 +171,10 @@ export function traceDetail(row: TraceRow): string {
   return row.note;
 }
 
-/** "Trace (1 missing)", "Trace (2 extra)" or just "Trace": what needs a look. */
+/** "Trace (2)" when items are missing, else "Trace". Extra items are normal additions and are not counted. */
 export function traceTabTitle(trace: Pick<TraceView, 'counts' | 'error'> | undefined): string {
   if (!trace || trace.error !== undefined) return 'Trace';
-  const open = trace.counts.missing + trace.counts.extra;
-  return open > 0 ? `Trace (${open})` : 'Trace';
+  return trace.counts.missing > 0 ? `Trace (${trace.counts.missing})` : 'Trace';
 }
 
 /** "5 sections not checked: Business scenario, …" */

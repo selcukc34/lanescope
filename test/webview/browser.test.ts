@@ -203,6 +203,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   /** SUB_BPMN: a sub-process that opens and an empty one. */
   let drillRender: RenderMessage;
   let trace: Awaited<ReturnType<typeof traceRenders>>;
+  let v1Package: ProcessPackage;
   let subTrace: Awaited<ReturnType<typeof traceRenders>>;
 
   beforeAll(async () => {
@@ -238,10 +239,11 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
     );
     ({ withShow: subRender } = await renderOf(renamed, await syntheticTwxPackage({ subProcess: true })));
+    v1Package = v1;
     trace = await traceRenders(v1, readFileSync(DESCRIPTION_MD, 'utf8'));
     subTrace = await traceRenders(
       await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
-      '## Steps\n- Prepare\n- Pick Items\n',
+      '## Main process steps\n- Prepare\n- Pick Items\n',
     );
 
     const profile = path.join(dir, 'profile');
@@ -449,7 +451,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     expect(shown).toEqual({
       hidden: false,
       active: 'Details',
-      summary: '19 of 41 matched · 5 near · 0 missing · 17 unchecked · 1 extra',
+      summary: '24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra',
       file: 'Checked against order-description.md',
       groups: [
         'Main process steps',
@@ -471,7 +473,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     const rows = await page.eval<string[][]>(
       `[...document.querySelectorAll('.trace-row')].slice(0, 3).map((r) => [r.querySelector('.trace-icon').textContent, r.querySelector('.trace-body > :first-child').textContent, r.querySelector('.trace-detail').textContent])`,
     );
-    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Trace (1)');
+    // Extra items are normal additions: the tab counts missing items only.
+    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Trace');
     expect(rows).toEqual([
       ['≈', 'Submit Order', "matched as 'Order Submitted'"],
       ['≈', 'Validate Order', "matched as 'Validate Order SF'"],
@@ -502,6 +505,27 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
     expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual(['pick']);
     expect(await page.eval<string>(`document.querySelector('[aria-labelledby="tab-details"] h2').textContent`)).toBe('Pick Items');
+  });
+
+  it('shows one notice line for a description without a section of the format, and counts missing items on the tab', async () => {
+    const empty = await traceRenders(v1Package, '# Orders\n\nThe customer orders and we deliver.\n');
+    await page.open(url, empty.picked);
+    expect(
+      await page.eval<{ tab: string; lines: string[]; rows: number; error: boolean }>(`({
+        tab: document.querySelector('.tab.active').textContent,
+        lines: [...document.querySelectorAll('[aria-labelledby="tab-trace"] p')].map((p) => p.textContent),
+        rows: document.querySelectorAll('.trace-row').length,
+        error: document.querySelector('.trace-error') !== null,
+      })`),
+    ).toEqual({
+      tab: 'Trace',
+      lines: ['No checkable sections found in order-description.md. Lanescope reads the Lanescope description format, see the README.'],
+      rows: 0,
+      error: false,
+    });
+    const missing = await traceRenders(v1Package, '## Main process steps\n- Ship Order\n- Bill Order\n- Route Order\n');
+    await page.open(url, missing.picked);
+    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Trace (2)');
   });
 
   it('Clear in the Trace tab asks the host to stop the check', async () => {

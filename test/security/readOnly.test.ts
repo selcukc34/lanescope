@@ -1,9 +1,12 @@
 // SECURITY.md scope 1: an opened file must not be able to make the extension
 // write, change or delete files. These tests scan every source file of the
 // extension host and the webview, so a write, delete, rename, edit, process
-// or network API added later fails CI and has to be looked at. The one write
-// is the export: a new file the user picks in a save dialog, checked by
-// src/views/exportFiles.ts so it is never the input or an input type.
+// or network API added later fails CI and has to be looked at. There are two
+// writes, both of new files only: the export (a file the user picks in a
+// save dialog, checked by src/views/exportFiles.ts so it is never the input
+// or an input type) and "New Process Description" (a .md next to the opened
+// file, checked by src/views/descriptionFiles.ts and created with the 'wx'
+// flag, which fails when the file exists).
 
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -25,6 +28,14 @@ const EXPORT_WRITE = `${path.join('src', 'views', 'processEditorProvider.ts')}:$
     .split('\n')
     .findIndex((line) => line.includes('await vscode.workspace.fs.writeFile(uri, bytes);')) + 1
 }: await vscode.workspace.fs.writeFile(uri, bytes);`;
+
+/** The other file write: a new description, created exclusively (see processEditorProvider's newDescriptionActive). */
+const DESCRIPTION_WRITE_LINE = "await writeFile(target, DESCRIPTION_TEMPLATE, { encoding: 'utf8', flag: 'wx' });";
+const DESCRIPTION_WRITE = `${path.join('src', 'views', 'processEditorProvider.ts')}:${
+  code(path.join('src', 'views', 'processEditorProvider.ts'))
+    .split('\n')
+    .findIndex((line) => line.includes(DESCRIPTION_WRITE_LINE)) + 1
+}: ${DESCRIPTION_WRITE_LINE}`;
 
 /** Code without comments, so prose about "writing" does not count. */
 function code(file: string): string {
@@ -51,19 +62,30 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
   it('has no file system write, delete, rename or permission call', () => {
     const fsWrites =
       /\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rmSync|rmdir|rmdirSync|rename|renameSync|mkdir|mkdirSync|mkdtemp|copyFile|copyFileSync|cp|cpSync|truncate|ftruncate|symlink|link|chmod|chown|utimes|lchown|futimes)\s*\(|\brm\s*\(|\bopen\s*\([^)]*['"][wa]\+?['"]/;
-    expect(hits(fsWrites)).toEqual([EXPORT_WRITE]);
+    expect(hits(fsWrites)).toEqual([DESCRIPTION_WRITE, EXPORT_WRITE]);
   });
 
   it('writes only an export, to a path the export checks accepted', () => {
     const provider = code(path.join('src', 'views', 'processEditorProvider.ts'));
     // The target comes from the save dialog, through checkExportTarget, and nowhere else.
     expect(provider).toContain('checkExportTarget(picked.fsPath, source.fsPath, format)');
-    expect(provider.match(/writeFile\(/g)).toHaveLength(1);
+    expect(provider.match(/writeFile\(/g)).toHaveLength(2);
     const session = code(path.join('src', 'views', 'viewerSession.ts'));
     expect(session).toContain('const target = await exporter.chooseTarget(');
   });
 
-  it('imports only readFile, readdir and stat from the file system module (existsSync in the ELK runner)', () => {
+  it('writes a new description only: next to the opened file, checked, never over an existing file', () => {
+    const provider = code(path.join('src', 'views', 'processEditorProvider.ts'));
+    // The target is <base>-description.md, through checkNewDescriptionTarget, and nowhere else.
+    expect(provider).toContain('checkNewDescriptionTarget(newDescriptionPath(uri.fsPath), uri.fsPath)');
+    expect(provider).toContain('const target = check.path;');
+    // 'wx': the write fails when the file exists, so an existing file is never touched.
+    expect(provider).toContain(DESCRIPTION_WRITE_LINE);
+    // The content is the fixed template only.
+    expect(provider.match(/DESCRIPTION_TEMPLATE/g)).toHaveLength(2);
+  });
+
+  it('imports only readFile, readdir and stat from the file system module (existsSync in the ELK runner, writeFile for the new description)', () => {
     const imports = FILES.flatMap((file) =>
       [...code(file).matchAll(/import\s+(?:\*\s+as\s+\w+|\{([^}]*)\}|\w+)\s+from\s+'(?:node:)?fs(?:\/promises)?'/g)].map(
         (m) => `${file}: ${m[1] ?? m[0]}`,
@@ -73,7 +95,12 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     for (const line of imports) {
       const names = (line.split(': ')[1] ?? '').split(',').map((n) => n.trim()).filter(Boolean);
       // existsSync only finds the ELK script the layout worker loads (src/bpmn/elkRunner.ts).
-      const allowed = line.startsWith(path.join('src', 'bpmn', 'elkRunner.ts')) ? ['existsSync'] : ['readFile', 'readdir', 'stat'];
+      // writeFile only for the new description (see DESCRIPTION_WRITE).
+      const allowed = line.startsWith(path.join('src', 'bpmn', 'elkRunner.ts'))
+        ? ['existsSync']
+        : line.startsWith(path.join('src', 'views', 'processEditorProvider.ts'))
+          ? ['writeFile']
+          : ['readFile', 'readdir', 'stat'];
       for (const name of names) expect(allowed).toContain(name);
     }
   });
@@ -101,7 +128,7 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     ).toEqual([]);
   });
 
-  it('contributes six commands: open a file, export the shown diagram to a new file, compare with a file and clear that, check against a description and clear that', () => {
+  it('contributes seven commands: open a file, export the shown diagram to a new file, compare with a file and clear that, check against a description, clear that and write a new one', () => {
     const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string }>; menus: { commandPalette: Array<{ command: string; when?: string }> } };
     };
@@ -112,8 +139,16 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
       'lanescope.clearComparison',
       'lanescope.checkDescription',
       'lanescope.clearDescription',
+      'lanescope.newDescription',
     ]);
-    for (const command of ['lanescope.export', 'lanescope.compare', 'lanescope.clearComparison', 'lanescope.checkDescription', 'lanescope.clearDescription']) {
+    for (const command of [
+      'lanescope.export',
+      'lanescope.compare',
+      'lanescope.clearComparison',
+      'lanescope.checkDescription',
+      'lanescope.clearDescription',
+      'lanescope.newDescription',
+    ]) {
       expect(pkg.contributes.menus.commandPalette).toContainEqual({ command, when: 'activeCustomEditorId == lanescope.processViewer' });
     }
   });

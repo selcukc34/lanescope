@@ -22,6 +22,7 @@ export default tseslint.config(
       'src/validate/**',
       'src/diff/**',
       'src/trace/**',
+      'src/views/descriptionFiles.ts',
       'src/views/exportFiles.ts',
       'src/views/protocol.ts',
       'src/views/viewModel.ts',

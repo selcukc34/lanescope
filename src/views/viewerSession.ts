@@ -407,10 +407,20 @@ export class ViewerSession {
   private traceView(pkg: ProcessPackage, root: Process): TraceView | undefined {
     const d = this.description;
     if (!d) return undefined;
-    const empty = { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, described: 0 };
-    if (!d.parsed) return { fileName: d.fileName, summary: '', counts: empty, rows: [], notChecked: [], error: d.error ?? 'The description could not be read.' };
+    const empty = { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, checkable: 0 };
+    const base = { fileName: d.fileName, summary: '', counts: empty, rows: [], notChecked: [] };
+    if (!d.parsed) return { ...base, error: d.error ?? 'The description could not be read.' };
     const result = checkTrace(d.parsed, pkg, root);
-    return { fileName: d.fileName, summary: traceSummary(result.counts), counts: result.counts, rows: result.rows, notChecked: result.notChecked };
+    // Not an error: the file is simply not written in the format.
+    if (!result.hasSections) return { ...base, notChecked: result.notChecked, notice: noSectionsNotice(d.fileName) };
+    return {
+      fileName: d.fileName,
+      summary: traceSummary(result.counts),
+      counts: result.counts,
+      rows: result.rows,
+      notChecked: result.notChecked,
+      ...(result.hasSteps ? {} : { notice: NO_STEPS_NOTICE }),
+    };
   }
 
   /** Handles one raw message from the webview. Unknown messages are ignored. */
@@ -762,6 +772,14 @@ export class ViewerSession {
     if (this.webviewReady && !this.disposed) this.deps.post(message);
   }
 }
+
+/** The Trace tab of a description with none of the checked sections. */
+export function noSectionsNotice(fileName: string): string {
+  return `No checkable sections found in ${fileName}. Lanescope reads the Lanescope description format, see the README.`;
+}
+
+/** The Trace tab of a description without "## Main process steps", which the format requires. */
+export const NO_STEPS_NOTICE = 'The description has no "Main process steps" section, so the steps are not checked and nothing is listed as extra.';
 
 /** The XML with BPMN_EXPORT_COMMENT after its XML declaration (at the top when it has none). */
 function withExportComment(xml: string): string {

@@ -267,7 +267,7 @@ export interface DiffView {
 export interface TraceView {
   /** File name of the description. */
   fileName: string;
-  /** "19 of 41 matched · 5 near · 0 missing · 17 unchecked · 1 extra"; empty with `error`. */
+  /** "24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra"; empty with `error` or without sections. */
   summary: string;
   counts: TraceCounts;
   rows: TraceRow[];
@@ -275,6 +275,8 @@ export interface TraceView {
   notChecked: string[];
   /** Why the description could not be checked (unreadable, too large); no rows then. */
   error?: string;
+  /** A note on what the description lacks: no checked section at all (no rows then), or no Main process steps section. */
+  notice?: string;
 }
 
 /** Host -> webview: draw a diagram. */

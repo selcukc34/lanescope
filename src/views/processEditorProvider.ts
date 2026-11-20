@@ -4,9 +4,12 @@
 // checked by ./exportFiles (never the input, never an input type). A file
 // picked to compare with is read the same way as the opened one, and never
 // written or watched. A description (Markdown) checked against the process is
-// read and watched, never written.
+// read and watched, never written. "New Process Description" writes the one
+// other file: a new description from a fixed template, created exclusively
+// (never over an existing file), checked by ./descriptionFiles.
 
 import { randomBytes } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { readBpmnPackage } from '../input/bpmnInput';
@@ -24,6 +27,8 @@ import { EXPORT_FORMATS, type ExportFormat, type HostMessage, type ViewerSetting
 import { ViewerSession, type CompareHost, type DescriptionHost, type ExportHost } from './viewerSession';
 import { descriptionCandidates, isWatchedChange, watchPatternFor } from './watchPattern';
 import { MAX_DESCRIPTION_BYTES } from '../trace/description';
+import { DESCRIPTION_TEMPLATE } from '../trace/template';
+import { checkNewDescriptionTarget, newDescriptionPath } from './descriptionFiles';
 import { buildWebviewHtml, createNonce } from './webviewHtml';
 
 export const VIEW_TYPE = 'lanescope.processViewer';
@@ -33,6 +38,7 @@ export const COMPARE_COMMAND = 'lanescope.compare';
 export const CLEAR_COMPARISON_COMMAND = 'lanescope.clearComparison';
 export const CHECK_DESCRIPTION_COMMAND = 'lanescope.checkDescription';
 export const CLEAR_DESCRIPTION_COMMAND = 'lanescope.clearDescription';
+export const NEW_DESCRIPTION_COMMAND = 'lanescope.newDescription';
 /** Workspace state key prefix of the description attached to a file (by its URI); null: the user cleared it. */
 const DESCRIPTION_KEY_PREFIX = 'lanescope.description:';
 /** Memento key of the folder the last export was written to. */
@@ -54,6 +60,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       vscode.commands.registerCommand(CLEAR_COMPARISON_COMMAND, () => provider.clearActive()),
       vscode.commands.registerCommand(CHECK_DESCRIPTION_COMMAND, () => provider.checkDescriptionActive()),
       vscode.commands.registerCommand(CLEAR_DESCRIPTION_COMMAND, () => provider.clearDescriptionActive()),
+      vscode.commands.registerCommand(NEW_DESCRIPTION_COMMAND, () => provider.newDescriptionActive()),
     );
   }
 
@@ -114,6 +121,50 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       return;
     }
     await session.setDescription(md.fsPath, true);
+  }
+
+  /**
+   * Lanescope: New Process Description: writes <base>-description.md from the
+   * template next to the opened file, opens it beside the diagram and attaches
+   * it. An existing file is never written: the user may open it instead.
+   */
+  private async newDescriptionActive(): Promise<void> {
+    const active = [...this.sessions].find(([panel]) => panel.active);
+    const uri = active ? this.documents.get(active[0]) : undefined;
+    if (!active || !uri) {
+      void vscode.window.showInformationMessage('Open a diagram in Lanescope to write a description for it.');
+      return;
+    }
+    if (uri.scheme !== 'file') {
+      void vscode.window.showErrorMessage('Descriptions can be written next to local files only.');
+      return;
+    }
+    const check = checkNewDescriptionTarget(newDescriptionPath(uri.fsPath), uri.fsPath);
+    if (!check.ok) {
+      void vscode.window.showErrorMessage(check.message);
+      return;
+    }
+    const target = check.path;
+    const name = path.basename(target);
+    let created = false;
+    if (!(await fileExists(target))) {
+      try {
+        // The second write of the extension: a new file only ('wx' fails when the path exists).
+        await writeFile(target, DESCRIPTION_TEMPLATE, { encoding: 'utf8', flag: 'wx' });
+        created = true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+          void vscode.window.showErrorMessage(`Cannot write ${name}: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+      }
+    }
+    if (!created) {
+      const choice = await vscode.window.showWarningMessage(`${name} already exists. It is not overwritten.`, { modal: true }, 'Open existing');
+      if (choice !== 'Open existing') return;
+    }
+    await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false, viewColumn: vscode.ViewColumn.Beside });
+    await active[1].setDescription(target, true);
   }
 
   /** Lanescope: Clear Description Check. */

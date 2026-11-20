@@ -301,7 +301,7 @@ export class SidePanel {
     const { button, body } = this.tabs.get('trace')!;
     button.hidden = trace === undefined;
     button.textContent = traceTabTitle(trace);
-    button.classList.toggle('has-changes', trace !== undefined && trace.error === undefined && trace.counts.missing + trace.counts.extra > 0);
+    button.classList.toggle('has-changes', trace !== undefined && trace.error === undefined && trace.counts.missing > 0);
     clear(body);
     if (!trace) {
       // The description was cleared while its tab was shown.
@@ -317,7 +317,13 @@ export class SidePanel {
       body.append(h('p', { class: 'hint trace-error' }, trace.error));
       return;
     }
+    if (trace.summary === '') {
+      // No checked section: one line, no rows, no error.
+      if (trace.notice !== undefined) body.append(h('p', { class: 'hint trace-notice' }, trace.notice));
+      return;
+    }
     body.append(h('p', { class: 'trace-summary' }, trace.summary));
+    if (trace.notice !== undefined) body.append(h('p', { class: 'hint trace-notice' }, trace.notice));
     if (trace.rows.length === 0) body.append(h('p', { class: 'empty' }, 'The description has no steps, gateway paths, business objects or human tasks to check.'));
     for (const group of traceGroups(trace.rows)) {
       body.append(h('section', { class: 'trace' }, h('h3', {}, group.title), h('ul', { class: 'trace-list' }, ...group.rows.map((r) => this.traceRow(r)))));
