@@ -62,4 +62,6 @@ BAW exports never go to the repo: `.twx` files may contain customer data and IBM
 
 ## Git
 
-Stage files by name (`git add <path> ...`). Never use `git add -A`, `git add .` or `git commit -a`. Run `git status` before every commit and make sure only intended files are staged; never commit F5 leftovers, generated test files or anything derived from `test/fixtures/local/`.
+- Stage files by name (`git add <path> ...`). Never use `git add -A`, `git add .` or `git commit -a`. Run `git status` before every commit and make sure only intended files are staged; never commit F5 leftovers or generated test files.
+- Manual (F5) testing uses copies under `test/fixtures/local/f5/` only (`npm run f5:prepare` makes them). Never create or modify files under committed fixture folders during manual tests. F5 instructions in reports must point to `test/fixtures/local/f5/` paths.
+- Never commit anything derived from `test/fixtures/local/`.

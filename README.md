@@ -401,6 +401,8 @@ The repository holds no IBM BAW exports: `.twx` files can contain customer proce
 2. Press **F5** (launch configuration "Run Extension"). This builds the extension and opens an Extension Development Host window.
 3. In that window, open the Command Palette and run **Lanescope: Open**.
 
+For manual tests, run `npm run f5:prepare`, then open files from `test/fixtures/local/f5/`: it holds fresh copies of the Bob fixtures (git ignores the folder), so descriptions written or edited while testing never land in the committed fixtures.
+
 ### How to test live refresh
 
 1. Extract the fixture into the git-ignored output folder:
