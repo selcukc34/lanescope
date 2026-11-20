@@ -2,7 +2,7 @@
 // reports issues; nothing is changed. The views show the issues in the
 // Warnings tab.
 
-import type { Flow, FlowNode, FlowNodeKind, Process } from '../model/model';
+import type { Flow, FlowNode, FlowNodeKind, Lane, Process } from '../model/model';
 
 export type Severity = 'warning';
 
@@ -190,20 +190,22 @@ export const noPathToEnd: ValidationRule = {
 
 /**
  * A lane that holds no flow node. Bob output keeps lanes it plans but never
- * fills; BAW keeps them too (as empty lanes of the BPD).
+ * fills; BAW keeps them too (as empty lanes of the BPD). The lanes of a
+ * sub-process's own diagram are checked here too, with the sub-process named.
  */
 export const emptyLane: ValidationRule = {
   id: 'empty-lane',
   check(process) {
     const used = new Set(process.nodes.map((n) => n.laneId).filter((id) => id !== undefined));
-    return process.lanes
-      .filter((lane) => !used.has(lane.id))
-      .map((lane) => ({
-        ruleId: 'empty-lane',
-        severity: 'warning' as const,
-        elementId: lane.id,
-        message: `Lane ${lane.name || lane.id} has no activities`,
-      }));
+    const issue = (lane: Lane, message: string): ValidationIssue => ({ ruleId: 'empty-lane', severity: 'warning', elementId: lane.id, message });
+    return [
+      ...process.lanes.filter((lane) => !used.has(lane.id)).map((lane) => issue(lane, `Lane ${lane.name || lane.id} has no activities`)),
+      ...process.nodes.flatMap((sub) =>
+        (sub.lanes ?? [])
+          .filter((lane) => !used.has(lane.id))
+          .map((lane) => issue(lane, `Lane "${lane.name || lane.id}" in sub-process "${sub.name || sub.id}" has no activities.`)),
+      ),
+    ];
   },
 };
 

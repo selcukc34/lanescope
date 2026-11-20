@@ -4,8 +4,10 @@
 // and DOM code, so the host and the tests share them.
 //
 // A level id is the BAW object id of what the level shows ("25.…" for a
-// process, "1.…" for a service; a Bob process uses its own id). The first
-// level is the process chosen in the picker.
+// process, "1.…" for a service; a Bob process uses its own id), or "sub:"
+// and the id of a sub-process for the inside of a sub-process, which
+// resolves in the level above it. The first level is the process chosen in
+// the picker.
 
 /** Most levels a path holds, the root process included; a guard, not a limit users should meet. */
 export const MAX_PATH_DEPTH = 20;
@@ -44,15 +46,16 @@ export interface ResolvedPath<T> {
 /**
  * Resolves the levels of a path in order and stops at the first one that no
  * longer exists (the file changed): the deepest level that still exists is
- * the one to show. The root must resolve; otherwise no level does.
+ * the one to show. The root must resolve; otherwise no level does. `resolve`
+ * gets the level above (undefined for the root), where a sub-process lives.
  */
 export async function resolvePath<T>(
   path: readonly string[],
-  resolve: (id: string, depth: number) => Promise<T | undefined> | T | undefined,
+  resolve: (id: string, depth: number, above: T | undefined) => Promise<T | undefined> | T | undefined,
 ): Promise<ResolvedPath<T>> {
   const levels: Array<ResolvedLevel<T>> = [];
   for (const [depth, id] of path.slice(0, MAX_PATH_DEPTH).entries()) {
-    const value = await resolve(id, depth);
+    const value = await resolve(id, depth, levels[levels.length - 1]?.value);
     if (value === undefined) return { levels, missing: id };
     levels.push({ id, value });
   }

@@ -103,8 +103,12 @@ const SERVICE_TYPES: Readonly<Record<string, string>> = {
   '12': 'ServiceFlow',
 };
 
-/** Reads one BPD object file. Throws only on XML that is not well formed. */
-export function readBpd(objectXml: string, resolver: TwxResolver): BpdReadResult {
+/**
+ * Reads one BPD object file. Throws only on XML that is not well formed.
+ * @param objectXml the XML of another object of the export by id, for the
+ *   diagrams of the BPD's sub-processes; without it their nodes have no bounds.
+ */
+export function readBpd(objectXml: string, resolver: TwxResolver, otherObject?: (id: string) => string | undefined): BpdReadResult {
   const root = parseXml(objectXml);
   const bpd = child(root, 'bpd') ?? first(root, 'bpd');
   if (!bpd) return { kind: 'skipped', warning: 'An object file under objects/25.* holds no <bpd> element.' };
@@ -148,21 +152,10 @@ export function readBpd(objectXml: string, resolver: TwxResolver): BpdReadResult
 
   const classic = readClassic(bpd, bpmnProcess);
   const lanes = classic.lanes.length > 0 ? classic.lanes.map((l) => l.lane) : bpmnLanes(bpmnProcess);
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  for (const lane of lanes) {
-    for (const nodeId of lane.nodeIds) {
-      const node = nodeById.get(nodeId);
-      if (node && node.parentId === undefined) node.laneId = lane.id;
-    }
-  }
-  for (const node of nodes) {
-    if (node.laneId !== undefined && assignedByLane.has(node.id)) {
-      const lane = lanes.find((l) => l.id === node.laneId);
-      if (lane?.name) node.performer = lane.name;
-    }
-  }
+  assignLanes(nodes, lanes, assignedByLane);
 
   placeNodes(nodes, classic, visual);
+  if (otherObject) readSubProcessDiagrams(nodes, visual, assignedByLane, otherObject);
 
   const documentation =
     docText(children(bpmnProcess, 'documentation').map(textContent).join('\n\n')) ??
@@ -435,7 +428,7 @@ interface ClassicModel {
   positions: Map<string, ClassicPosition>;
 }
 
-function readClassic(bpd: XmlElement, bpmnProcess: XmlElement): ClassicModel {
+function readClassic(bpd: XmlElement, bpmnProcess?: XmlElement): ClassicModel {
   let lanes: ClassicLane[] = [];
   const positions = new Map<string, ClassicPosition>();
   for (const diagram of children(bpd, 'BusinessProcessDiagram')) {
@@ -469,7 +462,7 @@ function readClassic(bpd: XmlElement, bpmnProcess: XmlElement): ClassicModel {
       }
     }
   }
-  lanes = withEmptyBpmnLanes(lanes, positions, bpmnProcess);
+  if (bpmnProcess) lanes = withEmptyBpmnLanes(lanes, positions, bpmnProcess);
   setLaneBounds(lanes, bpd);
   return { lanes, positions };
 }
@@ -530,8 +523,65 @@ function setLaneBounds(lanes: ClassicLane[], bpd: XmlElement): void {
   }
 }
 
-/** Sets absolute bounds on the top-level nodes the classic model places. */
-function placeNodes(nodes: FlowNode[], classic: ClassicModel, visual: Map<string, Bounds>): void {
+/**
+ * Puts the nodes `lanes` name in their lane: the top-level nodes, or with
+ * `parentId` the nodes directly inside that sub-process. A user task that
+ * BAW assigns to the users of its lane gets the lane name as performer.
+ */
+function assignLanes(nodes: FlowNode[], lanes: Lane[], assignedByLane: ReadonlySet<string>, parentId?: string): void {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const lane of lanes) {
+    for (const nodeId of lane.nodeIds) {
+      const node = nodeById.get(nodeId);
+      if (!node || node.parentId !== parentId) continue;
+      node.laneId = lane.id;
+      if (assignedByLane.has(node.id) && lane.name) node.performer = lane.name;
+    }
+  }
+}
+
+/**
+ * BAW keeps the diagram of each sub-process and event sub-process as an
+ * object of its own: "25." and the sub-process id, with the BPD as its
+ * parentBpdId and no BPMN2 model. It is read like the BPD's own diagram:
+ * its lanes (names, order, heights) become the sub-process's lanes, and its
+ * flowObjects, the nodes directly inside the sub-process, are put in their
+ * lanes and placed. Without that object the nodes have no lane and no
+ * bounds (and are laid out when opened).
+ */
+function readSubProcessDiagrams(
+  nodes: FlowNode[],
+  visual: Map<string, Bounds>,
+  assignedByLane: ReadonlySet<string>,
+  otherObject: (id: string) => string | undefined,
+): void {
+  for (const sub of nodes) {
+    if (sub.kind !== 'subProcess') continue;
+    const xml = otherObject(`25.${sub.id}`);
+    if (xml === undefined) continue;
+    let bpd: XmlElement | undefined;
+    try {
+      const root = parseXml(xml);
+      bpd = child(root, 'bpd') ?? first(root, 'bpd');
+    } catch {
+      continue;
+    }
+    if (!bpd || !childText(bpd, 'parentBpdId')) continue;
+    const classic = readClassic(bpd);
+    if (classic.lanes.length > 0) {
+      sub.lanes = classic.lanes.map((l) => l.lane);
+      assignLanes(nodes, sub.lanes, assignedByLane, sub.id);
+    }
+    placeNodes(nodes, classic, visual, sub.id);
+  }
+}
+
+/**
+ * Sets absolute bounds on the nodes the classic model places: the top-level
+ * nodes, or with `parentId` the nodes directly inside that sub-process (in
+ * the coordinates of the sub-process's own diagram).
+ */
+function placeNodes(nodes: FlowNode[], classic: ClassicModel, visual: Map<string, Bounds>, parentId?: string): void {
   // Top of each lane: the heights of the lanes above it. Unknown after a lane without a height.
   const tops: Array<number | undefined> = [];
   let top: number | undefined = 0;
@@ -541,7 +591,7 @@ function placeNodes(nodes: FlowNode[], classic: ClassicModel, visual: Map<string
   }
 
   for (const node of nodes) {
-    if (node.parentId !== undefined) continue; // inside a sub-process: drawn collapsed
+    if (node.parentId !== parentId) continue;
     const pos = classic.positions.get(node.id);
     const laneTop = pos ? tops[pos.laneIndex] : undefined;
     if (!pos || laneTop === undefined) continue;

@@ -21,6 +21,7 @@ import type { RenderMessage } from '../../src/views/protocol';
 import { ViewerSession } from '../../src/views/viewerSession';
 import { buildCsp } from '../../src/views/webviewHtml';
 import { NOTIFY_TASK_ID, V1_ZIP, V2_ZIP } from '../bobV2';
+import { syntheticTwxPackage } from '../syntheticTwx';
 
 const MAC_CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CHROME = process.env.LANESCOPE_CHROME ?? (existsSync(MAC_CHROME) ? MAC_CHROME : undefined);
@@ -131,6 +132,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   let ws: WebSocket;
   let render: RenderMessage;
   let renderAgain: RenderMessage;
+  /** A TWX process compared with a version where a task inside the sub-process "Check Stock" has another name. */
+  let subRender: RenderMessage;
 
   beforeAll(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'lanescope-browser-'));
@@ -159,6 +162,9 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     const v1 = await readProcessPackage(await readBpmnPackage(V1_ZIP));
     const v2 = await readProcessPackage(await readBpmnPackage(V2_ZIP));
     ({ withShow: render, again: renderAgain } = await renderOf(v2, v1));
+    const renamed = await syntheticTwxPackage({ subProcess: true });
+    renamed.processes[0].nodes.find((n) => n.name === 'Count Items')!.name = 'Count All Items';
+    ({ withShow: subRender } = await renderOf(renamed, await syntheticTwxPackage({ subProcess: true })));
 
     const profile = path.join(dir, 'profile');
     chrome = spawn(CHROME!, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--allow-file-access-from-files', '--no-first-run', '--window-size=1400,900', 'about:blank'], {
@@ -248,6 +254,19 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     await page.pressEnter();
     expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([MANAGER_TASK_ID]);
     expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Details');
+  });
+
+  it('marks a sub-process with inner changes, and a row of an element inside it selects the sub-process', async () => {
+    const checkId = Object.values(subRender.elements).find((e) => e.name === 'Check Stock')!.id;
+    await page.open(url, subRender);
+    expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.ls-diff-changed')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([checkId]);
+    await page.clickButton('Script task "Count All Items"');
+    const after = await page.eval<{ selected: string[]; details: string; errors: string[] }>(`({
+      selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+      details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+      errors: window.__errors,
+    })`);
+    expect(after).toEqual({ selected: [checkId], details: 'Check Stock', errors: [] });
   });
 
   it('keeps the chosen tab on a render without the Compare… flag', async () => {

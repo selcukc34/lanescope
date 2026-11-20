@@ -15,6 +15,7 @@ import { readBpmnZip, DEFAULT_LIMITS } from '../../src/input/bpmnInput';
 import { declaredEntryCount } from '../../src/input/zip';
 import type { Flow, FlowNode, Process, ProcessPackage } from '../../src/model/model';
 import { htmlToPlainText } from '../../src/model/plainText';
+import { childCounts, subProcessDiagram } from '../../src/model/subProcess';
 import { readTwxArchive } from '../../src/twx/twxReader';
 import type { HostMessage } from '../../src/views/protocol';
 import { ViewerSession, type Timers } from '../../src/views/viewerSession';
@@ -320,7 +321,19 @@ describe('large and cyclic processes', () => {
     for (let i = 1; i <= depth; i++) nodes.push({ ...node(i, false), kind: 'subProcess', parentId: `n${i - 1}` });
     const { value, ms } = await timed(() => layoutProcess({ id: 'deep', name: 'Deep', documentation: '', nodes, flows: [], lanes: [] }));
     expect(value.hiddenNodeIds.size).toBe(depth);
-    expect(value.warnings[0]).toContain(`its ${depth} inner node(s) are not shown`);
+    expect(value.warnings).toEqual([]);
+    expect(ms).toBeLessThan(5_000);
+  });
+
+  it('opening the outermost of deeply nested sub-processes, and counting what they hold, is linear', async () => {
+    const depth = 50_000;
+    const nodes: FlowNode[] = [{ ...node(0, false), kind: 'subProcess' }];
+    for (let i = 1; i <= depth; i++) nodes.push({ ...node(i, false), kind: 'subProcess', parentId: `n${i - 1}` });
+    const process = { id: 'deep', name: 'Deep', documentation: '', nodes, flows: [], lanes: [] };
+    const { value, ms } = await timed(async () => ({ sub: subProcessDiagram(process, 'sub:n0'), counts: childCounts(process) }));
+    expect(value.sub!.nodes).toHaveLength(depth);
+    expect(value.sub!.nodes.filter((n) => n.parentId === undefined).map((n) => n.id)).toEqual(['n1']);
+    expect(value.counts.get('n0')).toBe(1);
     expect(ms).toBeLessThan(5_000);
   });
 

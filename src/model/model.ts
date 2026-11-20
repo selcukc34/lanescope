@@ -76,6 +76,16 @@ export interface Process {
   outputs?: DataParameter[];
   /** TWX: what kind of object the diagram was read from. Undefined for Bob output (a process). */
   source?: ProcessOrigin;
+  /** Set on the diagram of a sub-process opened as a level of its own (./subProcess). */
+  subProcess?: SubProcessLevel;
+}
+
+/** What a sub-process diagram was derived from. */
+export interface SubProcessLevel {
+  /** Level id of the diagram (see src/views/navigation): "sub:" and the sub-process's identity. */
+  levelId: string;
+  /** True for an event sub-process (triggeredByEvent). */
+  eventSubProcess: boolean;
 }
 
 export interface ProcessOrigin {
@@ -166,6 +176,13 @@ export interface FlowNode {
   parentId?: string;
   /** Sub-processes only: true for an event sub-process (triggeredByEvent="true"). */
   triggeredByEvent?: boolean;
+  /**
+   * Sub-processes only: the lanes of the sub-process's own diagram, when the
+   * source has them (TWX: the BAW sub-process diagram; Bob: a laneSet inside
+   * the bpmn:subProcess). They are independent of the process lanes; the
+   * laneId of a node directly inside the sub-process names one of them.
+   */
+  lanes?: Lane[];
   /** The service or process a call activity calls (TWX: calledElement="1.…" or "25.…"). */
   calledElement?: CalledElement;
   /** Diagram bounds, only when the source has them (a bpmndi section, the TWX diagram). */

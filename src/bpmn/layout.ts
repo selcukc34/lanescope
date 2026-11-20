@@ -284,22 +284,11 @@ export async function layoutProcess(process: Process, options: LayoutOptions = {
   const warnings: string[] = [];
   const nodeIds = new Set(process.nodes.map((n) => n.id));
 
-  // Collapsed sub-processes: their children are not drawn.
+  // Collapsed sub-processes: their children are not drawn here; the viewer
+  // opens a sub-process as a diagram of its own (src/model/subProcess).
   const hiddenNodeIds = new Set<string>();
-  const parentOf = new Map(process.nodes.map((n) => [n.id, n.parentId]));
   for (const node of process.nodes) {
     if (node.parentId !== undefined) hiddenNodeIds.add(node.id);
-  }
-  const collapsed = new Map<string, number>();
-  const topOf = new Map<string, string>();
-  for (const id of hiddenNodeIds) {
-    const top = topAncestor(id, parentOf, topOf);
-    collapsed.set(top, (collapsed.get(top) ?? 0) + 1);
-  }
-  const nameOf = new Map(process.nodes.map((n) => [n.id, n.name]));
-  for (const [id, count] of collapsed) {
-    const name = nameOf.get(id) ?? id;
-    warnings.push(`Sub-process "${name}" is drawn collapsed; its ${count} inner node(s) are not shown.`);
   }
 
   const nodes = process.nodes.filter((n) => !hiddenNodeIds.has(n.id));
@@ -361,33 +350,6 @@ export async function layoutProcess(process: Process, options: LayoutOptions = {
     result = await layoutWithElk(bands, graph, warnings, options.elkTimeoutMs ?? ELK_TIMEOUT_MS);
   }
   return { ...result, flowLabels, hiddenNodeIds, hiddenFlowIds, warnings };
-}
-
-/** The outermost ancestor of a node; `memo` caches answers, so deep nesting stays linear. */
-function topAncestor(id: string, parentOf: Map<string, string | undefined>, memo: Map<string, string>): string {
-  const chain: string[] = [];
-  const seen = new Set<string>();
-  let current = id;
-  let top: string | undefined;
-  while (top === undefined) {
-    const known = memo.get(current);
-    if (known !== undefined) {
-      top = known;
-      break;
-    }
-    // A cycle of parents ends where it closes.
-    if (seen.has(current)) {
-      top = current;
-      break;
-    }
-    seen.add(current);
-    chain.push(current);
-    const parent = parentOf.get(current);
-    if (parent === undefined || !parentOf.has(parent)) top = current;
-    else current = parent;
-  }
-  for (const c of chain) memo.set(c, top);
-  return top;
 }
 
 function buildBands(process: Process, nodes: FlowNode[], hideEmpty: boolean, warnings: string[]): Band[] {

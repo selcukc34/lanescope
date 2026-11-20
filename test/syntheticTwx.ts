@@ -10,6 +10,17 @@
 //                                -> Call Discount (calls "Apply Discount")
 //                                -> Has Total? -> Priced | Unpriced
 //   service flow "Apply Discount"   Start -> End
+//
+// With `subProcess`, the BPD also holds, in the System lane:
+//   sub-process "Check Stock" between Review Order and Approved?
+//     Check Start -> Count Items (boundary timer "Timeout") -> Reserve Items -> Check End
+//     sub-process "Reserve Items": Reserve Start -> Reserve End
+//   event sub-process "On Error": Error Start -> Error End
+// BAW keeps the diagram of a sub-process as an object of its own
+// (25.<sub-process id>, with parentBpdId), with lanes of its own; Check Stock
+// has one with two lanes (Warehouse: Check Start, Count Items; Shipping:
+// Reserve Items, Check End), On Error one with All Users and an empty lane
+// Escalation, Reserve Items none (its nodes have no lane and no positions).
 
 import JSZip from 'jszip';
 import { readTwxArchive, type TwxArchive } from '../src/twx/twxReader';
@@ -173,6 +184,116 @@ const DISCOUNT_SERVICE = `<?xml version="1.0" encoding="UTF-8"?>
   </process>
 </teamworks>`;
 
+/** Ids of the sub-processes of the `subProcess` variant (UUIDs, as BAW writes them). */
+export const CHECK_STOCK_ID = '00000000-0000-4000-8000-0000000000c1';
+export const ON_ERROR_ID = '00000000-0000-4000-8000-0000000000c2';
+
+const SUB_PROCESSES_BPMN2 = `
+    <bpmn:subProcess id="${CHECK_STOCK_ID}" name="Check Stock">
+      ${vis(480, 50, 95, 70)}
+      <bpmn:startEvent id="node:check-start" name="Check Start">${vis(25, 80, 24, 24)}</bpmn:startEvent>
+      <bpmn:scriptTask id="node:count" name="Count Items">
+        ${vis(150, 57, 95, 70)}
+        <bpmn:script>tw.local.count = 1;</bpmn:script>
+      </bpmn:scriptTask>
+      <bpmn:boundaryEvent id="node:timeout" name="Timeout" attachedToRef="node:count">${vis(200, 110, 24, 24)}</bpmn:boundaryEvent>
+      <bpmn:subProcess id="node:reserve" name="Reserve Items">
+        ${vis(320, 57, 95, 70)}
+        <bpmn:startEvent id="node:reserve-start" name="Reserve Start"/>
+        <bpmn:endEvent id="node:reserve-end" name="Reserve End"/>
+        <bpmn:sequenceFlow id="flow:reserve" sourceRef="node:reserve-start" targetRef="node:reserve-end"/>
+      </bpmn:subProcess>
+      <bpmn:endEvent id="node:check-end" name="Check End">${vis(500, 80, 24, 24)}</bpmn:endEvent>
+      <bpmn:sequenceFlow id="flow:check-1" sourceRef="node:check-start" targetRef="node:count"/>
+      <bpmn:sequenceFlow id="flow:check-2" sourceRef="node:count" targetRef="node:reserve"/>
+      <bpmn:sequenceFlow id="flow:check-3" sourceRef="node:reserve" targetRef="node:check-end"/>
+    </bpmn:subProcess>
+    <bpmn:sequenceFlow id="flow:check" sourceRef="${CHECK_STOCK_ID}" targetRef="node:gateway"/>
+    <bpmn:subProcess id="${ON_ERROR_ID}" name="On Error" triggeredByEvent="true">
+      ${vis(700, 20, 95, 70)}
+      <bpmn:startEvent id="node:error-start" name="Error Start">${vis(25, 80, 24, 24)}</bpmn:startEvent>
+      <bpmn:endEvent id="node:error-end" name="Error End">${vis(300, 80, 24, 24)}</bpmn:endEvent>
+      <bpmn:sequenceFlow id="flow:error" sourceRef="node:error-start" targetRef="node:error-end"/>
+    </bpmn:subProcess>`;
+
+/** A lane of a sub-process diagram object; locations are relative to the lane. */
+interface SubLane {
+  id: string;
+  name: string;
+  height: number;
+  flowObjects: string;
+}
+
+/** The diagram object BAW keeps for a sub-process: one pool, its lanes, the nodes directly inside. */
+const subProcessObject = (id: string, name: string, lanes: SubLane[]) => `<?xml version="1.0" encoding="UTF-8"?>
+<teamworks>
+  <bpd id="25.${id}" name="Synthetic Order_${name}">
+    <bpmn2Data isNull="true"/>
+    <parentBpdId>${BPD_ID}</parentBpdId>
+    <BusinessProcessDiagram id="diagram-${id}">
+      <pool id="pool-${id}">
+        <name>Pool</name>
+        <dimension><size w="3000" h="${lanes.reduce((h, l) => h + l.height, 0)}"/></dimension>
+        ${lanes
+          .map(
+            (l) => `<lane id="${l.id}">
+          <name>${l.name}</name>
+          <height>${l.height}</height>
+          ${l.flowObjects}
+        </lane>`,
+          )
+          .join('\n        ')}
+      </pool>
+    </BusinessProcessDiagram>
+  </bpd>
+</teamworks>`;
+
+/** Lane ids of the sub-process diagrams. */
+export const SUB_LANE_IDS = {
+  warehouse: 'sublane:warehouse',
+  shipping: 'sublane:shipping',
+  allUsers: 'sublane:all-users',
+  escalation: 'sublane:escalation',
+} as const;
+
+const CHECK_STOCK_OBJECT = subProcessObject(CHECK_STOCK_ID, 'Check Stock', [
+  {
+    id: SUB_LANE_IDS.warehouse,
+    name: 'Warehouse',
+    height: 150,
+    flowObjects: `${flowObject('node:check-start', 25, 80)}
+          <flowObject id="node:count"><position><location x="150" y="57"/></position><attachedEvent id="node:timeout"/></flowObject>`,
+  },
+  {
+    id: SUB_LANE_IDS.shipping,
+    name: 'Shipping',
+    height: 120,
+    flowObjects: `${flowObject('node:reserve', 320, 25)}
+          ${flowObject('node:check-end', 500, 48)}`,
+  },
+]);
+
+const ON_ERROR_OBJECT = subProcessObject(ON_ERROR_ID, 'On Error', [
+  {
+    id: SUB_LANE_IDS.allUsers,
+    name: 'All Users',
+    height: 200,
+    flowObjects: `${flowObject('node:error-start', 25, 80)}
+          ${flowObject('node:error-end', 300, 80)}`,
+  },
+  { id: SUB_LANE_IDS.escalation, name: 'Escalation', height: 100, flowObjects: '' },
+]);
+
+/** The BPD with the sub-processes: Check Stock goes between Review Order and Approved?. */
+function withSubProcesses(bpdObject: string): string {
+  const bpmn2 = BPD_BPMN2.replace('sourceRef="node:review" targetRef="node:gateway"', `sourceRef="node:review" targetRef="${CHECK_STOCK_ID}"`)
+    .replace('<bpmn:flowNodeRef>node:gateway</bpmn:flowNodeRef>', `<bpmn:flowNodeRef>${CHECK_STOCK_ID}</bpmn:flowNodeRef><bpmn:flowNodeRef>${ON_ERROR_ID}</bpmn:flowNodeRef><bpmn:flowNodeRef>node:gateway</bpmn:flowNodeRef>`)
+    .replace('  </bpmn:process>', `${SUB_PROCESSES_BPMN2}\n  </bpmn:process>`);
+  return bpdObject
+    .replace(escapeXml(BPD_BPMN2), escapeXml(bpmn2))
+    .replace(`${flowObject('node:gateway', 400, 60)}`, `${flowObject(CHECK_STOCK_ID, 480, 50)}${flowObject(ON_ERROR_ID, 700, 20)}${flowObject('node:gateway', 400, 60)}`);
+}
+
 /** Id of the BPD in the variant with other ids. */
 export const OTHER_BPD_ID = '25.00000000-0000-4000-8000-0000000000b2';
 
@@ -182,6 +303,8 @@ export interface SyntheticOptions {
    * give it in another export: the comparison must pair it by names.
    */
   otherIds?: boolean;
+  /** The BPD with a sub-process (with a nested one) and an event sub-process, and their diagram objects. */
+  subProcess?: boolean;
 }
 
 const withOtherIds = (xml: string) => xml.replaceAll(BPD_ID, OTHER_BPD_ID).replace(/\b(node|flow|lane):/g, '$1-b2:');
@@ -191,7 +314,12 @@ export async function syntheticTwxBytes(options: SyntheticOptions = {}): Promise
   const zip = new JSZip();
   const bpdId = options.otherIds ? OTHER_BPD_ID : BPD_ID;
   zip.file('META-INF/package.xml', options.otherIds ? withOtherIds(PACKAGE_XML) : PACKAGE_XML);
-  zip.file(`objects/${bpdId}.xml`, options.otherIds ? withOtherIds(BPD_OBJECT) : BPD_OBJECT);
+  const bpd = options.subProcess ? withSubProcesses(BPD_OBJECT) : BPD_OBJECT;
+  zip.file(`objects/${bpdId}.xml`, options.otherIds ? withOtherIds(bpd) : bpd);
+  if (options.subProcess) {
+    zip.file(`objects/25.${CHECK_STOCK_ID}.xml`, CHECK_STOCK_OBJECT);
+    zip.file(`objects/25.${ON_ERROR_ID}.xml`, ON_ERROR_OBJECT);
+  }
   zip.file(`objects/${PRICE_SERVICE_ID}.xml`, PRICE_SERVICE);
   zip.file(`objects/${DISCOUNT_SERVICE_ID}.xml`, DISCOUNT_SERVICE);
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
