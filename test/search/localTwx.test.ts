@@ -29,7 +29,9 @@ describe.skipIf(!hasLocalTwx('services'))('search on services.twx', () => {
     const r = search(indexOf('JsSampleProcess'), SCRIPT_WORD);
     expect(r.groups).toHaveLength(1);
     const g = r.groups[0];
-    expect(g.group).toMatchObject({ kind: 'Called service', name: 'JsLoops', where: [INSIDE_SERVICE] });
+    expect(g.group).toMatchObject({ kind: INSIDE_SERVICE, name: 'JsLoops', caller: 'JsLoops', where: [] });
+    // The group's head opens the service, the same level as its rows.
+    expect(g.group.open).toEqual({ levelId: g.hits[0].open?.levelId });
     expect(g.hits.map((h) => [h.label, h.match])).toEqual([
       ['Step "Script task" · Script', SCRIPT_WORD],
       ['Step "Script task 1" · Script', SCRIPT_WORD],
@@ -68,7 +70,8 @@ describe.skipIf(!hasLocalTwx('services'))('search on services.twx', () => {
 
   it('finds coach controls and bindings inside a called human service', () => {
     const r = search(indexOf('Demo_MainProcess'), 'customerName');
-    const g = r.groups.find((x) => x.group.name === 'Enter Customer' && x.group.where.includes(INSIDE_SERVICE))!;
+    const g = r.groups.find((x) => x.group.kind === INSIDE_SERVICE && x.group.caller === 'Enter Customer')!;
+    expect(g.group.name).toBe('Demo_CustomerForm');
     expect(g.hits.map((h) => h.label)).toContain('Coach "Coach" · Binding');
     expect(g.hits.find((h) => h.label === 'Coach "Coach" · Binding')!.open?.stepId).toBeDefined();
   });
@@ -77,7 +80,7 @@ describe.skipIf(!hasLocalTwx('services'))('search on services.twx', () => {
     const r = search(indexOf('Demo_MainProcess'), '"EU"');
     expect(r.groups.map((g) => [g.group.kind, g.group.name, g.group.where])).toEqual([
       ['Task', 'Demo_Routing', []],
-      ['Called service', 'Demo_Routing', [INSIDE_SERVICE]],
+      [INSIDE_SERVICE, 'Demo_Routing', []],
     ]);
     expect(r.groups[0].hits.map((h) => `${h.label}: ${h.before}[${h.match}]${h.after}`)).toEqual(['Input mapping: region = ["EU"]']);
     // The condition as written has tabs; the snippet collapses them.
@@ -86,7 +89,7 @@ describe.skipIf(!hasLocalTwx('services'))('search on services.twx', () => {
 
   it('gives a node inside a sub-process its level', () => {
     const r = search(indexOf('MyFirstProcess'), 'Service flow2');
-    const g = r.groups.find((x) => x.group.kind !== 'Called service' && x.group.name === 'Service flow2')!;
+    const g = r.groups.find((x) => x.group.kind !== INSIDE_SERVICE && x.group.name === 'Service flow2')!;
     expect(g.group.where).toEqual(['Sub1']);
     expect(g.group.target).toMatchObject({ type: 'node', levels: [expect.stringMatching(/^sub:/)] });
   });

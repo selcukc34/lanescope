@@ -31,7 +31,7 @@ export interface SearchIndexOptions {
   showScripts: boolean;
 }
 
-/** Label of the group that holds the inside of a called service. */
+/** Kind of the group that holds the inside of a called service. */
 export const INSIDE_SERVICE = 'Inside service';
 
 class IndexBuilder {
@@ -41,8 +41,8 @@ class IndexBuilder {
 
   constructor(private readonly showScripts: boolean) {}
 
-  group(target: SearchTarget, kind: string, name: string, where: string[]): number {
-    this.groups.push({ target, kind, name, where });
+  group(target: SearchTarget, kind: string, name: string, where: string[], extra: Pick<SearchGroup, 'caller' | 'open'> = {}): number {
+    this.groups.push({ target, kind, name, where, ...extra });
     return this.groups.length - 1;
   }
 
@@ -119,7 +119,7 @@ function indexProcess(b: IndexBuilder, pkg: ProcessPackage, process: Process): v
     b.add(g, 'Catches', node.errorEvent?.errorCode);
 
     const inside = node.calledElement?.internals;
-    if (inside) indexInside(b, pkg, node.calledElement!, inside, target, node.name, [...where, INSIDE_SERVICE]);
+    if (inside) indexInside(b, pkg, node.calledElement!, inside, target, node.name, where);
   }
 
   for (const flow of process.flows) {
@@ -147,9 +147,12 @@ function indexInside(
   callerName: string,
   where: string[],
 ): void {
-  const g = b.group(caller, 'Called service', callerName, where);
   // The steps open in the service's diagram when it can be drawn.
   const levelId = pkg.calleeDiagrams?.openability(called.id).openable ? called.id : undefined;
+  const g = b.group(caller, INSIDE_SERVICE, calledName(called), where, {
+    caller: callerName || '(unnamed)',
+    ...(levelId !== undefined ? { open: { levelId } } : {}),
+  });
   const open = (stepId?: string): SearchOpen | undefined =>
     levelId === undefined ? undefined : { levelId, ...(stepId !== undefined ? { stepId } : {}) };
   const opened = (stepId?: string) => {

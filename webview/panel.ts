@@ -254,17 +254,30 @@ export class SidePanel {
     else nav[Math.min(nav.length - 1, Math.max(0, index + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
   }
 
-  /** A group: its element (kind, name, where it is) and one row per hit. */
+  /**
+   * A group: its element (kind, name, where it is) and one row per hit. The
+   * inside of a service is marked as such: its rows open the service.
+   */
   private searchGroup(g: SearchResultGroup): HTMLElement {
     const { group } = g;
+    const inside = group.caller !== undefined;
+    const where = [...group.where, ...(inside ? [`called by ${group.caller}`] : [])];
     const head = h(
       'button',
-      { class: 'link search-head search-nav', type: 'button', title: 'Select in the diagram and show its details' },
-      h('span', { class: 'badge kind' }, group.kind),
+      {
+        class: `link search-head search-nav${inside ? ' search-inside' : ''}`,
+        type: 'button',
+        title: inside
+          ? group.open
+            ? 'Open the called service as a diagram'
+            : 'Select the activity that calls this service (the service cannot be opened as a diagram)'
+          : 'Select in the diagram and show its details',
+      },
+      h('span', { class: `badge kind${inside ? ' inside-badge' : ''}` }, inside ? `↳ ${group.kind}:` : group.kind),
       h('span', { class: 'search-name' }, group.name || '(unnamed)'),
-      group.where.length > 0 ? h('span', { class: 'muted search-where' }, ` › ${group.where.join(' › ')}`) : null,
+      where.length > 0 ? h('span', { class: 'muted search-where' }, ` › ${where.join(' › ')}`) : null,
     );
-    head.addEventListener('click', () => this.changes.revealSearch(group.target));
+    head.addEventListener('click', () => this.changes.revealSearch(group.target, group.open));
     return h(
       'section',
       { class: 'search-group' },
@@ -273,21 +286,30 @@ export class SidePanel {
     );
   }
 
+  /**
+   * A row goes where the match is: inside a called service it opens the
+   * service and selects the step ("Show caller" stays on the process and
+   * selects the activity instead); otherwise it selects the element.
+   */
   private searchRow(target: SearchTarget, hit: SearchHit): HTMLElement {
+    const open = hit.open;
     const row = h(
       'button',
-      { class: 'search-row search-nav', type: 'button', title: 'Select in the diagram and show its details' },
+      {
+        class: 'search-row search-nav',
+        type: 'button',
+        title: open ? 'Open the called service as a diagram and select this step' : 'Select in the diagram and show its details',
+      },
       h('span', { class: 'search-label muted' }, hit.label),
       h('span', { class: 'search-snippet' }, hit.before, h('mark', {}, hit.match), hit.after),
     );
-    row.addEventListener('click', () => this.changes.revealSearch(target));
-    let open: HTMLButtonElement | null = null;
-    if (hit.open) {
-      const where = hit.open;
-      open = h('button', { class: 'link small search-open', type: 'button', title: 'Open the called service as a diagram and select this step' }, 'Open in service');
-      open.addEventListener('click', () => this.changes.revealSearch(target, where));
+    row.addEventListener('click', () => this.changes.revealSearch(target, open));
+    let caller: HTMLButtonElement | null = null;
+    if (open) {
+      caller = h('button', { class: 'link small search-caller', type: 'button', title: 'Stay on the process and select the activity that calls this service' }, 'Show caller');
+      caller.addEventListener('click', () => this.changes.revealSearch(target));
     }
-    return h('li', { class: 'search-hit' }, row, open);
+    return h('li', { class: 'search-hit' }, row, caller);
   }
 
   private revealType(name: string): void {

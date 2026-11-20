@@ -196,10 +196,19 @@ describe('search on the synthetic TWX export', () => {
 
   it('finds a step inside the called service, under the calling activity, with the step to open', () => {
     const r = search(buildSearchIndex(twx, { showScripts: true }), 'Compute Total');
-    const inside = r.groups.find((g) => g.group.where.includes(INSIDE_SERVICE))!;
-    expect(inside.group).toMatchObject({ kind: 'Called service', name: 'Review Order', where: [INSIDE_SERVICE] });
+    const inside = r.groups.find((g) => g.group.kind === INSIDE_SERVICE)!;
+    expect(inside.group).toMatchObject({ kind: INSIDE_SERVICE, name: 'Price Order', caller: 'Review Order', where: [], open: { levelId: PRICE_SERVICE_ID } });
     expect(inside.group.target).toMatchObject({ type: 'node', levels: [] });
     expect(inside.hits[0]).toMatchObject({ label: 'Step', match: 'Compute Total', open: { levelId: PRICE_SERVICE_ID, stepId: 'svc:script' } });
+  });
+
+  it('gives the inside of a service called from a sub-process the sub-process as well', async () => {
+    const pkg = await syntheticTwxPackage({ subProcess: true });
+    const review = pkg.processes[0].nodes.find((n) => n.name === 'Review Order')!;
+    const sub = pkg.processes[0].nodes.find((n) => n.name === 'Check Stock')!;
+    review.parentId = sub.id;
+    const g = search(buildSearchIndex(pkg, { showScripts: true }), 'Compute Total').groups.find((x) => x.group.kind === INSIDE_SERVICE)!;
+    expect(g.group).toMatchObject({ where: ['Check Stock'], caller: 'Review Order', target: { levels: [`sub:${CHECK_STOCK_ID}`] } });
   });
 
   it('finds a node inside a sub-process with its level', () => {

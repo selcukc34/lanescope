@@ -14,14 +14,23 @@ export type SearchTarget =
   /** A business object of the package (the Data tab). */
   | { type: 'dataType'; name: string };
 
-/** One result group: an element of the process and where it is. */
+/**
+ * One result group: an element of the process and where it is, or the
+ * inside of a service an activity calls.
+ */
 export interface SearchGroup {
+  /** The element of the chosen process; for the inside of a service, the activity that calls it. */
   target: SearchTarget;
-  /** "Call activity", "Sequence flow", "Process", "Business object", ... */
+  /** "Call activity", "Sequence flow", "Process", "Business object", "Inside service", ... */
   kind: string;
+  /** The element's name; for the inside of a service, the service's name. */
   name: string;
-  /** Where the group is below the chosen process: enclosing sub-processes, then "Inside service" for a called service. */
+  /** The enclosing sub-processes of the target, outermost first. */
   where: string[];
+  /** The inside of a service: the name of the activity that calls it. */
+  caller?: string;
+  /** The inside of a service that opens as a diagram: its level (no step). */
+  open?: SearchOpen;
 }
 
 /** A diagram level a field can open: a called service, and the step of it to select. */
@@ -41,7 +50,7 @@ export interface SearchField {
   text: string;
   /** True for the group's own name: such hits sort first. */
   isName?: true;
-  /** Inside a called service: the service diagram and the step to open. */
+  /** Inside a called service that opens as a diagram: the service and the step to select there. */
   open?: SearchOpen;
 }
 

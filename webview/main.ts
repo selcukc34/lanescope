@@ -61,6 +61,8 @@ interface DiagramElement {
   height?: number;
   /** Connections: their points. */
   waypoints?: Array<{ x: number; y: number }>;
+  /** The external label of an event, gateway or flow, when it has one. */
+  label?: DiagramElement;
 }
 
 interface Canvas {
@@ -69,7 +71,6 @@ interface Canvas {
   resized(): void;
   addMarker(element: DiagramElement, marker: string): void;
   removeMarker(element: DiagramElement, marker: string): void;
-  scrollToElement(element: DiagramElement, padding?: number): void;
 }
 
 interface ElementRegistry {
@@ -371,6 +372,8 @@ async function render(msg: RenderMessage): Promise<void> {
     // The diagram selects the same element again (its drill-down arrow with it).
     const kept = panel.selection !== undefined ? viewer.get<ElementRegistry>('elementRegistry').get(panel.selection) : undefined;
     if (kept) viewer.get<Selection>('selection').select(kept);
+    // Back on a level (breadcrumb, Back, Escape): the selection it had is brought into view if needed.
+    if (kept && restored) revealInView(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
     // A description was just picked: show its check.
@@ -418,8 +421,9 @@ function markChanges(msg: RenderMessage): void {
 }
 
 /**
- * A row of the Changes tab was clicked: select the element (as a click on it
- * does), scroll it into view at the current zoom, and show its details.
+ * A row of the Changes, Trace or Search tab was clicked: select the element
+ * (as a click on it does), bring it into view if needed (revealInView) and
+ * show its details. A Search row keeps the Search tab on screen.
  */
 function revealElement(id: string, fromSearch = false): void {
   if (!current) return;
@@ -430,30 +434,55 @@ function revealElement(id: string, fromSearch = false): void {
   const element = registry.get(shownId)!;
   viewer.get<Selection>('selection').select(element);
   panel.select(shownId);
-  if (fromSearch) {
-    // A search result is centred, at the current zoom; the results stay on screen.
-    centerOn(element);
-    return;
-  }
-  // Scrolls only when the element is (partly) out of view; the zoom stays.
-  canvas().scrollToElement(element, 80);
-  panel.showTab('details');
+  revealInView(element);
+  if (!fromSearch) panel.showTab('details');
 }
 
-/** Moves the view so that the element is in the middle, keeping the zoom. */
-function centerOn(element: DiagramElement): void {
-  const c = canvas();
-  const box = c.viewbox();
-  let center: { x: number; y: number } | undefined;
-  if (element.waypoints && element.waypoints.length > 0) {
-    const xs = element.waypoints.map((p) => p.x);
-    const ys = element.waypoints.map((p) => p.y);
-    center = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
-  } else if (element.x !== undefined && element.y !== undefined) {
-    center = { x: element.x + (element.width ?? 0) / 2, y: element.y + (element.height ?? 0) / 2 };
+/** Margin, in screen pixels, an element is given from the edge of the view when the view has to move. */
+const REVEAL_MARGIN_PX = 40;
+
+/** The box of an element and its external label, in diagram coordinates. */
+function elementBox(element: DiagramElement): { x: number; y: number; right: number; bottom: number } | undefined {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const p of element.waypoints ?? []) {
+    xs.push(p.x);
+    ys.push(p.y);
   }
-  if (!center) return;
-  c.viewbox({ x: center.x - box.width / 2, y: center.y - box.height / 2, width: box.width, height: box.height });
+  for (const part of [element, element.label]) {
+    if (!part || part.waypoints || part.x === undefined || part.y === undefined) continue;
+    xs.push(part.x, part.x + (part.width ?? 0));
+    ys.push(part.y, part.y + (part.height ?? 0));
+  }
+  if (xs.length === 0) return undefined;
+  return { x: Math.min(...xs), y: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+/**
+ * The one way a revealed element is brought into view (Search, Changes and
+ * Trace rows, the selection brought back to a level): when it and its label
+ * are in view, nothing moves; otherwise the view moves by as little as puts
+ * them REVEAL_MARGIN_PX inside the edge, at the same zoom, never to the
+ * middle. An element larger than the view shows its top left corner.
+ */
+function revealInView(element: DiagramElement): void {
+  const box = elementBox(element);
+  if (!box) return;
+  const c = canvas();
+  const view = c.viewbox();
+  const margin = REVEAL_MARGIN_PX / view.scale;
+  /** The new start of the view along one axis. */
+  const shift = (start: number, size: number, from: number, to: number): number => {
+    const end = start + size;
+    if (from >= start && to <= end) return start;
+    // Larger than the view: its top left corner, unless that is in view already.
+    if (to - from + 2 * margin > size) return from >= start && from <= end ? start : from - margin;
+    return from < start ? from - margin : to + margin - size;
+  };
+  const x = shift(view.x, view.width, box.x, box.right);
+  const y = shift(view.y, view.height, box.y, box.bottom);
+  if (x === view.x && y === view.y) return;
+  c.viewbox({ x, y, width: view.width, height: view.height });
 }
 
 /** Selects what a pending reveal asked for, once its level is drawn. */

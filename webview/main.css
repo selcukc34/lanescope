@@ -989,6 +989,11 @@ table.grid td {
   border-radius: 2px;
 }
 
-.search-open {
+.search-caller {
   font-size: 0.9em;
+}
+
+.badge.inside-badge {
+  background: var(--vscode-textLink-foreground);
+  color: var(--vscode-editor-background);
 }

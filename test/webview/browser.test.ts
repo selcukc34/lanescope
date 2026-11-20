@@ -206,6 +206,19 @@ async function renderOf(open: ProcessPackage, base: ProcessPackage): Promise<{ w
   return { withShow, again: renders[renders.length - 1] };
 }
 
+/** The transform of the diagram's viewport: the same text means the same view (position and zoom). */
+const viewport = `document.querySelector('.djs-container .viewport').getAttribute('transform')`;
+
+/** Where an element is in the canvas: its distance from each edge and from the middle (CSS pixels). */
+const placement = (id: string) => `(() => {
+  const e = document.querySelector('[data-element-id="${id}"] .djs-visual').getBoundingClientRect();
+  const c = document.querySelector('.canvas').getBoundingClientRect();
+  return { left: e.left - c.left, top: e.top - c.top, right: c.right - e.right, bottom: c.bottom - e.bottom,
+    fromMiddle: Math.hypot(e.left + e.width / 2 - (c.left + c.width / 2), e.top + e.height / 2 - (c.top + c.height / 2)) };
+})()`;
+type Placement = { left: number; top: number; right: number; bottom: number; fromMiddle: number };
+const scaleOf = (transform: string) => Number(/matrix\(([^ ,)]+)/.exec(transform)?.[1]);
+
 describe.skipIf(!CHROME)('webview in a real browser', () => {
   let dir: string;
   let url: string;
@@ -755,6 +768,76 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Data');
   });
 
+  describe('reveal if needed', () => {
+    const zoomIn = (times: number) =>
+      page.eval(`(() => { const plus = [...document.querySelectorAll('button')].find((b) => b.textContent === '+'); for (let i = 0; i < ${times}; i++) plus.click(); })()`);
+    const typeSearch = async (text: string) => {
+      await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); i.select(); })()`);
+      await page.send('Input.insertText', { text });
+      await page.eval('new Promise((r) => setTimeout(r, 320))');
+    };
+    /** An element brought into view moved as little as it could: one edge is the margin away, it is not in the middle. */
+    const expectMinimal = (p: Placement) => {
+      for (const edge of [p.left, p.top, p.right, p.bottom]) expect(edge).toBeGreaterThanOrEqual(30);
+      expect(Math.min(p.left, p.top, p.right, p.bottom)).toBeLessThan(50);
+      expect(p.fromMiddle).toBeGreaterThan(100);
+    };
+
+    it('does not move the view for an element in view: Search, Changes and Trace rows, and a click', async () => {
+      await page.open(url, render);
+      const before = await page.eval<string>(viewport);
+      await page.clickButton('User task "Manager Review"');
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([MANAGER_TASK_ID]);
+      expect(await page.eval<string>(viewport)).toBe(before);
+      await page.clickSelector(`[data-element-id="${ROUTE_GATEWAY_ID}"] .djs-hit`);
+      expect(await page.eval<string>(viewport)).toBe(before);
+      await typeSearch('Handle Exception');
+      await page.eval(`document.querySelector('.search-row').click()`);
+      expect(await page.eval<string>(viewport)).toBe(before);
+
+      await page.open(url, trace.picked);
+      const traceBefore = await page.eval<string>(viewport);
+      await page.clickButton('Validate Order');
+      expect(await page.eval<number>(`document.querySelectorAll('.djs-element.selected').length`)).toBe(1);
+      expect(await page.eval<string>(viewport)).toBe(traceBefore);
+    });
+
+    it('moves an element out of view in by as little as needed, at the same zoom: Search, Changes and Trace rows', async () => {
+      // Search.
+      await page.open(url, trace.found);
+      await zoomIn(8);
+      const zoomed = await page.eval<string>(viewport);
+      const target = Object.values(trace.found.elements).find((e) => e.name === 'Exception Handled')!.id;
+      const out = await page.eval<Placement>(placement(target));
+      expect(Math.min(out.left, out.top, out.right, out.bottom)).toBeLessThan(0);
+      await typeSearch('Exception Handled');
+      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('End event')).click()`);
+      expect(scaleOf(await page.eval<string>(viewport))).toBeCloseTo(scaleOf(zoomed), 2);
+      expectMinimal(await page.eval<Placement>(placement(target)));
+      // Revealed again: in view now, nothing moves.
+      const once = await page.eval<string>(viewport);
+      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('End event')).click()`);
+      expect(await page.eval<string>(viewport)).toBe(once);
+
+      // Changes.
+      await page.open(url, render);
+      await zoomIn(8);
+      const changesZoom = scaleOf(await page.eval<string>(viewport));
+      await page.clickButton('Task "Notify Customer SF"');
+      expect(scaleOf(await page.eval<string>(viewport))).toBeCloseTo(changesZoom, 2);
+      expectMinimal(await page.eval<Placement>(placement(NOTIFY_TASK_ID)));
+
+      // Trace.
+      await page.open(url, trace.picked);
+      await zoomIn(8);
+      const traceZoom = scaleOf(await page.eval<string>(viewport));
+      const handle = (trace.picked.trace!.rows.find((r) => r.text === 'Handle Exception')!.target as { id: string }).id;
+      await page.clickButton('Handle Exception');
+      expect(scaleOf(await page.eval<string>(viewport))).toBeCloseTo(traceZoom, 2);
+      expectMinimal(await page.eval<Placement>(placement(handle)));
+    });
+  });
+
   describe('keyword search', () => {
     /** Types into the search box (real key input) and waits out the debounce. */
     const typeSearch = async (text: string) => {
@@ -797,30 +880,26 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(await page.eval<number>(`document.querySelectorAll('.djs-element.ls-selected, .djs-element.selected').length`)).toBe(0);
     });
 
-    it('selects and centres the element of a clicked row, updates Details and stays on Search', async () => {
+    it('selects the element of a clicked row in place, updates Details and stays on Search', async () => {
       await page.open(url, trace.found);
-      // Zoomed in, so the gateway is off-centre.
-      await page.eval(`(() => { const plus = [...document.querySelectorAll('button')].find((b) => b.textContent === '+'); for (let i = 0; i < 6; i++) plus.click(); })()`);
       await typeSearch('EXCEPTION');
+      const before = await page.eval<string>(viewport);
       await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent.includes('tw.local.order.route != "EXCEPTION"')).click()`);
-      const after = await page.eval<{ selected: string[]; details: string; tab: string; offset: number }>(`(() => {
-        const el = document.querySelector('.djs-element.selected').getBoundingClientRect();
-        const c = document.querySelector('.canvas').getBoundingClientRect();
-        return {
-          selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
-          details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
-          tab: document.querySelector('.tab.active').textContent,
-          offset: Math.max(Math.abs(el.x + el.width / 2 - (c.x + c.width / 2)), Math.abs(el.y + el.height / 2 - (c.y + c.height / 2))),
-        };
-      })()`);
+      const after = await page.eval<{ selected: string[]; details: string; tab: string }>(`({
+        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+        tab: document.querySelector('.tab.active').textContent,
+      })`);
       const validId = Object.values(trace.found.elements).find((e) => e.kind === 'flow' && e.name === 'Valid')!.id;
       expect(after.selected).toEqual([validId]);
       expect(after.details).toBe('Valid');
       expect(after.tab).toMatch(/^Search \(/);
-      expect(after.offset).toBeLessThan(4);
+      // In view already: the view does not move.
+      expect(await page.eval<string>(viewport)).toBe(before);
       // The group head selects the element too.
       await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('Route Order')).click()`);
       expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([ROUTE_GATEWAY_ID]);
+      expect(await page.eval<string>(viewport)).toBe(before);
       expect(await page.eval<string[]>('window.__errors')).toEqual([]);
     });
 
@@ -913,33 +992,59 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(ui).toEqual({ selected: ['pick'], details: 'Pick Items', tab: 'Search (1)', rows: ['NamePick Items'] });
     });
 
-    it('"Open in service" opens the called service and selects the step there; the row itself selects the caller', async () => {
+    it('goes where the match is: a match inside a service opens the service on its step; "Show caller" goes back to the caller', async () => {
       const renders: RenderMessage[] = [];
       const s = new ViewerSession({ fileName: 'synthetic.twx', load: () => syntheticTwxPackage(), post: (m) => void (m.type === 'render' && renders.push(m)) });
       await s.handleMessage({ type: 'ready' });
       const top = renders[renders.length - 1];
-      await page.open(url, top);
-      await typeSearch('Compute Total');
       const reviewId = Object.values(top.elements).find((e) => e.name === 'Review Order')!.id;
-      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'StepCompute Total').click()`);
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([reviewId]);
-
-      await page.eval('window.__posted.length = 0');
-      await page.clickButton('Open in service');
-      const posted = await page.eval<Array<{ calleeId: string; path: string[] }>>(`window.__posted.filter((m) => m.type === 'openCallee')`);
-      expect(posted).toEqual([{ type: 'openCallee', calleeId: PRICE_SERVICE_ID, path: [BPD_ID] }]);
-      await s.handleMessage(posted[0]);
-      const level = renders[renders.length - 1];
-      expect(level.path.map((l) => l.name)).toEqual(['Synthetic Order', 'Price Order']);
-      await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
-      const stepId = Object.values(level.elements).find((e) => e.originalId === 'svc:script' || e.id === 'svc:script')!.id;
-      const ui = await page.eval<{ selected: string[]; details: string; tab: string }>(`({
+      /** Posts what the host draws for the webview's last openCallee, and waits for it to be drawn. */
+      const answer = async () => {
+        const posted = await page.eval<Array<{ type: 'openCallee'; calleeId: string; path: string[] }>>(`window.__posted.filter((m) => m.type === 'openCallee')`);
+        expect(posted).toHaveLength(1);
+        await page.eval('window.__posted.length = 0');
+        await s.handleMessage(posted[0]);
+        await page.eval(`(async () => { window.postMessage(${JSON.stringify(renders[renders.length - 1])}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
+        return posted[0];
+      };
+      const ui = `({
         selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
         details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+        crumbs: document.querySelector('.crumbs').hidden ? [] : [...document.querySelectorAll('.crumbs li')].map((e) => e.textContent),
         tab: document.querySelector('.tab.active').textContent,
-      })`);
-      expect(ui).toMatchObject({ selected: [stepId], details: 'Compute Total' });
-      expect(ui.tab).toMatch(/^Search \(/);
+      })`;
+      type Ui = { selected: string[]; details: string; crumbs: string[]; tab: string };
+
+      await page.open(url, top);
+      await typeSearch('Compute Total');
+      // The head says where its rows go.
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.search-inside')].map((e) => e.textContent)`)).toEqual(['↳ Inside service:Price Order › called by Review Order']);
+      await page.eval('window.__posted.length = 0');
+      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'StepCompute Total').click()`);
+      expect(await answer()).toEqual({ type: 'openCallee', calleeId: PRICE_SERVICE_ID, path: [BPD_ID] });
+      const level = renders[renders.length - 1];
+      const stepId = Object.values(level.elements).find((e) => e.originalId === 'svc:script' || e.id === 'svc:script')!.id;
+      expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [stepId], details: 'Compute Total', crumbs: ['Synthetic Order', 'Price Order'], tab: expect.stringMatching(/^Search \(/) });
+
+      // "Show caller": back on the process, the calling activity selected.
+      await page.clickButton('Show caller');
+      expect(await answer()).toEqual({ type: 'openCallee', calleeId: BPD_ID, path: [] });
+      expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [reviewId], details: 'Review Order', crumbs: [] });
+
+      // The head of the group: the service with nothing selected, its summary in Details.
+      await page.eval(`document.querySelector('.search-inside').click()`);
+      await answer();
+      expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [], details: 'Price Order', crumbs: ['Synthetic Order', 'Price Order'] });
+      // The breadcrumb leads back.
+      await page.clickButton('Synthetic Order');
+      await answer();
+      expect((await page.eval<Ui>(ui)).crumbs).toEqual([]);
+
+      // A match in the activity's own fields stays on the level.
+      await typeSearch('Review Order');
+      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'NameReview Order').click()`);
+      expect(await page.eval<unknown[]>(`window.__posted.filter((m) => m.type === 'openCallee')`)).toEqual([]);
+      expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [reviewId], details: 'Review Order' });
       expect(await page.eval<string[]>('window.__errors')).toEqual([]);
     });
 

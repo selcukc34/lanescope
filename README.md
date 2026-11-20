@@ -337,7 +337,11 @@ What is searched (when the file has it; Bob output has names, documentation, lan
 - **Sub-processes:** the nodes and flows inside them, shown with the sub-process they are in.
 - **Data:** the process's variables, inputs and outputs, and the business objects and their fields (the XSD of Bob output included).
 
-Matches are listed per element, names first, then in diagram order, each with the field it is in and the text around it; at most 500 are listed ("Showing first 500 matches"). Click a row (or press **↓** in the box, **↑**/**↓** and **Enter**) to select the element, centre it and update its details; a match inside a sub-process opens that level first. A match inside a called service selects the activity that calls it; **Open in service** opens the service as a diagram and selects the step. The diagram is not marked otherwise.
+Matches are listed per element, names first, then in diagram order, each with the field it is in and the text around it; at most 500 are listed ("Showing first 500 matches"). The inside of a called service is a group of its own, **↳ Inside service: &lt;service&gt;**, with the activity that calls it.
+
+A result goes where the word is: a match in an element's own fields (name, documentation, lane, mappings, what it calls, settings, condition) selects that element on its level (a sub-process level is opened first), and a match inside a called service opens the service as a diagram and selects the step (just the service, with its summary in Details, for a service variable); **Show caller** on such a row selects the calling activity instead, and the breadcrumb leads back. Click a row, or press **↓** in the box, then **↑**/**↓** and **Enter**. Details is updated and the Search tab stays open. The diagram is not marked otherwise.
+
+Revealing an element (a row of the Search, Changes or Trace tab, or the selection brought back when you return to a level) never recentres the diagram: an element already in view stays where it is, and one out of view is moved in by as little as needed, at the same zoom. A newly opened level is fitted to the window first.
 
 With `lanescope.showScripts` off, script code is not searched at all (it never reaches the diagram view) and the tab says "Scripts were not searched because lanescope.showScripts is off."
 
