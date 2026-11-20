@@ -28,10 +28,14 @@ const CHROME = process.env.LANESCOPE_CHROME ?? (existsSync(MAC_CHROME) ? MAC_CHR
 const ROOT = path.join(__dirname, '..', '..');
 const MANAGER_TASK_ID = 'bpmnid-8bb2f288-e134-5909-b32a-670be5367f60';
 
-/** Stands in for the VS Code webview API and records what the page posts, reports and keeps. */
+/**
+ * Stands in for the VS Code webview API and records what the page posts,
+ * reports and keeps. A \`?state=<json>\` query is the state VS Code hands a
+ * webview rebuilt after its editor tab was hidden.
+ */
 const STUB = `
 window.__posted = [];
-window.__state = undefined;
+window.__state = (() => { const s = new URLSearchParams(location.search).get('state'); return s === null ? undefined : JSON.parse(s); })();
 window.__errors = [];
 window.acquireVsCodeApi = () => ({
   postMessage: (m) => window.__posted.push(m),
@@ -92,6 +96,17 @@ class Page {
     }
   }
 
+  /** A real mouse click in the middle of the first element matching `selector`. */
+  async clickSelector(selector: string): Promise<void> {
+    const at = await this.eval<{ x: number; y: number } | null>(
+      `(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+    );
+    if (!at) throw new Error(`Nothing matches ${selector}`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+    }
+  }
+
   async pressEnter(): Promise<void> {
     for (const type of ['keyDown', 'keyUp']) {
       await this.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) });
@@ -105,6 +120,34 @@ class Page {
     await this.eval(`(async () => { ${before}; window.postMessage(${JSON.stringify(render)}, '*'); })()`);
     await this.eval(`new Promise((r) => { const t = () => (document.querySelector('.djs-element') && document.querySelector('.overlay').hidden ? r(true) : setTimeout(t, 20)); t(); })`);
   }
+}
+
+/** A Bob process with a sub-process that opens (Prepare) and an empty one. */
+const SUB_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="defs" targetNamespace="http://example.com/sub">
+  <bpmn:process id="order" name="Order">
+    <bpmn:startEvent id="start" name="Start"/>
+    <bpmn:subProcess id="prepare" name="Prepare">
+      <bpmn:startEvent id="prepStart" name="Prepare Start"/>
+      <bpmn:task id="pick" name="Pick Items"/>
+      <bpmn:endEvent id="prepEnd" name="Prepare End"/>
+      <bpmn:sequenceFlow id="sf1" sourceRef="prepStart" targetRef="pick"/>
+      <bpmn:sequenceFlow id="sf2" sourceRef="pick" targetRef="prepEnd"/>
+    </bpmn:subProcess>
+    <bpmn:subProcess id="empty" name="Empty"/>
+    <bpmn:endEvent id="end" name="End"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="prepare"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="prepare" targetRef="empty"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="empty" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** The first render of a package, as the host posts it. */
+async function plainRender(pkg: ProcessPackage): Promise<RenderMessage> {
+  const renders: RenderMessage[] = [];
+  const s = new ViewerSession({ fileName: 'order.bpmn', load: async () => pkg, post: (m) => void (m.type === 'render' && renders.push(m)) });
+  await s.handleMessage({ type: 'ready' });
+  return renders[renders.length - 1];
 }
 
 async function renderOf(open: ProcessPackage, base: ProcessPackage): Promise<{ withShow: RenderMessage; again: RenderMessage }> {
@@ -134,6 +177,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   let renderAgain: RenderMessage;
   /** A TWX process compared with a version where a task inside the sub-process "Check Stock" has another name. */
   let subRender: RenderMessage;
+  /** SUB_BPMN: a sub-process that opens and an empty one. */
+  let drillRender: RenderMessage;
 
   beforeAll(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'lanescope-browser-'));
@@ -164,6 +209,9 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     ({ withShow: render, again: renderAgain } = await renderOf(v2, v1));
     const renamed = await syntheticTwxPackage({ subProcess: true });
     renamed.processes[0].nodes.find((n) => n.name === 'Count Items')!.name = 'Count All Items';
+    drillRender = await plainRender(
+      await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
+    );
     ({ withShow: subRender } = await renderOf(renamed, await syntheticTwxPackage({ subProcess: true })));
 
     const profile = path.join(dir, 'profile');
@@ -267,6 +315,90 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       errors: window.__errors,
     })`);
     expect(after).toEqual({ selected: [checkId], details: 'Check Stock', errors: [] });
+    // Selected from the Changes tab: its drill-down arrow shows.
+    expect(
+      await page.eval<string[]>(
+        `[...document.querySelectorAll('.ls-drilldown')].filter((b) => getComputedStyle(b).display !== 'none').map((b) => b.closest('.djs-overlays').getAttribute('data-container-id'))`,
+      ),
+    ).toEqual([checkId]);
+  });
+
+  it('shows our drill-down arrow only on the selected sub-process that opens; a click opens its level and the canvas stays', async () => {
+    expect(drillRender.elements.prepare).toMatchObject({ openCallee: 'sub:prepare' });
+    expect(drillRender.elements.empty).toMatchObject({ openUnavailable: 'Empty sub-process' });
+    await page.open(url, drillRender);
+    const state = `({
+      arrows: [...document.querySelectorAll('.bjs-drilldown')]
+        .filter((b) => getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().width > 0)
+        .map((b) => [b.closest('.djs-overlays').getAttribute('data-container-id'), b.classList.contains('ls-drilldown'), b.title]),
+      breadcrumbs: document.querySelectorAll('.bjs-breadcrumbs').length,
+      start: document.querySelector('[data-element-id="start"]').getBoundingClientRect().width > 0,
+      details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+    })`;
+    type State = { arrows: unknown[]; breadcrumbs: number; start: boolean; details: string };
+    const ARROW = ['prepare', true, 'Open Prepare'];
+
+    // Nothing selected: no arrow; no breadcrumb of bpmn-js.
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [], breadcrumbs: 0, start: true });
+    // The sub-process selected: its arrow, and only that one.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [ARROW], details: 'Prepare' });
+    // Another element: gone. The empty sub-process: none.
+    await page.clickSelector('[data-element-id="start"] .djs-hit');
+    expect((await page.eval<State>(state)).arrows).toEqual([]);
+    await page.clickSelector('[data-element-id="empty"] .djs-hit');
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [], details: 'Empty' });
+    // The empty canvas: gone.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    const box = await page.eval<{ x: number; y: number }>(`(() => { const r = document.querySelector('.canvas').getBoundingClientRect(); return { x: r.x + 4, y: r.bottom - 4 }; })()`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await page.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    }
+    expect((await page.eval<State>(state)).arrows).toEqual([]);
+
+    // A re-render that keeps the selection (a toggle) keeps the arrow on it.
+    await page.clickSelector('[data-element-id="prepare"] .djs-hit');
+    await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...drillRender, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+    expect(await page.eval<State>(state)).toMatchObject({ arrows: [ARROW], details: 'Prepare' });
+
+    // A click on the arrow opens the level, as a double-click does; the canvas stays on the process.
+    await page.eval('window.__posted.length = 0');
+    await page.clickSelector('.ls-drilldown');
+    expect(await page.eval<unknown[]>('window.__posted')).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
+    expect(await page.eval<State>(state)).toMatchObject({ breadcrumbs: 0, start: true });
+    expect(await page.eval<string[]>('window.__errors')).toEqual([]);
+  });
+
+  it('keeps the drill-down arrows out of an exported image', async () => {
+    await page.open(url, drillRender);
+    const xml = drillRender.xml;
+    await page.eval(`window.postMessage(${JSON.stringify({ type: 'exportSource', requestId: 'export-1', format: 'svg', xml })}, '*')`);
+    await page.eval(`new Promise((r) => { const t = () => (window.__posted.some((m) => m.type === 'exportData') ? r(true) : setTimeout(t, 20)); t(); })`);
+    const svg = await page.eval<string>(`(() => { const m = window.__posted.find((m) => m.type === 'exportData'); return typeof m.data === 'string' ? m.data : JSON.stringify(m); })()`);
+    expect(svg).toContain('<svg');
+    expect(svg).not.toMatch(/drilldown|<button/);
+    expect(await page.eval<number>(`document.querySelectorAll('.bjs-breadcrumbs').length`)).toBe(0);
+  });
+
+  it('opens the saved tab when the webview is rebuilt (its editor tab was shown again)', async () => {
+    await page.open(url, renderAgain, `document.getElementById('tab-warnings').click()`);
+    const saved = await page.eval<unknown>('window.__state');
+    expect(saved).toEqual({ tab: 'warnings' });
+
+    await page.open(`${url}?state=${encodeURIComponent(JSON.stringify(saved))}`, renderAgain);
+    const shown = await page.eval<{ tab: string; state: unknown; errors: string[] }>(`({
+      tab: document.querySelector('.tab.active').textContent,
+      state: window.__state,
+      errors: window.__errors,
+    })`);
+    expect(shown.tab).toMatch(/^Warnings/);
+    expect(shown.state).toEqual({ tab: 'warnings' });
+    expect(shown.errors).toEqual([]);
+  });
+
+  it('opens Details when the saved tab is not one it knows', async () => {
+    await page.open(`${url}?state=${encodeURIComponent(JSON.stringify({ tab: 'settings' }))}`, renderAgain);
+    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Details');
   });
 
   it('keeps the chosen tab on a render without the Compare… flag', async () => {

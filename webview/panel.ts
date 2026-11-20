@@ -40,7 +40,13 @@ import {
   stepNote,
 } from './panelText';
 
-export type TabId = 'details' | 'data' | 'warnings' | 'changes';
+export const TAB_IDS = ['details', 'data', 'warnings', 'changes'] as const;
+export type TabId = (typeof TAB_IDS)[number];
+
+/** True for a known tab id; a saved webview state may hold anything. */
+export function isTabId(value: unknown): value is TabId {
+  return (TAB_IDS as readonly unknown[]).includes(value);
+}
 
 /** What the Changes tab asks of the viewer. */
 export interface ChangesActions {
@@ -80,6 +86,8 @@ export class SidePanel {
     /** The user asked to open a called service or linked process as a diagram. */
     private readonly onOpenCallee: (calleeId: string) => void,
     private readonly changes: ChangesActions,
+    /** The tab shown first, e.g. the one saved before the webview was hidden; not reported to onTabChange. */
+    initialTab: TabId = 'details',
   ) {
     const tabBar = h('div', { class: 'tabs', role: 'tablist' });
     const bodies = h('div', { class: 'tab-bodies' });
@@ -97,14 +105,20 @@ export class SidePanel {
       this.tabs.set(id, { button, body });
     }
     this.element = h('aside', { class: 'panel' }, tabBar, bodies);
-    this.showTab('details');
+    this.applyTab(initialTab);
   }
 
   get activeTab(): TabId {
     return this.active;
   }
 
+  /** Shows a tab and reports it to onTabChange (a click, a revealed element or type, Compare…). */
   showTab(id: TabId): void {
+    this.applyTab(id);
+    this.onTabChange(id);
+  }
+
+  private applyTab(id: TabId): void {
     this.active = id;
     for (const [tabId, { button, body }] of this.tabs) {
       const on = tabId === id;
@@ -112,7 +126,6 @@ export class SidePanel {
       button.setAttribute('aria-selected', String(on));
       body.hidden = !on;
     }
-    this.onTabChange(id);
   }
 
   /**

@@ -6,6 +6,7 @@
 
 import NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
 import { h } from './dom';
+import { NO_BPMN_DRILLDOWN } from './drilldown';
 import { EXPORT_FILL, EXPORT_STROKE, exportSvg, pngScale, svgDataUrl, svgViewBox } from './exportSvg';
 
 /** Draws the BPMN in a hidden viewer with light colours and returns the export SVG. */
@@ -16,6 +17,8 @@ export async function renderExportSvg(xml: string): Promise<string> {
   const viewer = new NavigatedViewer({
     container: host,
     keyboard: { bind: false },
+    // No drill-down arrows or breadcrumb in the hidden viewer either (overlays are never in the SVG).
+    additionalModules: [NO_BPMN_DRILLDOWN],
     bpmnRenderer: {
       defaultFillColor: EXPORT_FILL,
       defaultStrokeColor: EXPORT_STROKE,

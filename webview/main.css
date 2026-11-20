@@ -751,3 +751,12 @@ table.grid td {
   background: var(--ls-diff-removed);
   color: var(--vscode-editor-background);
 }
+
+/* The drill-down arrow of a sub-process (./drilldown.ts): only while the sub-process is selected. */
+.djs-overlays .ls-drilldown {
+  display: none;
+}
+
+.djs-overlays.selected .ls-drilldown {
+  display: inline-block;
+}

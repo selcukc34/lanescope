@@ -19,9 +19,10 @@ import type {
   WebviewMessage,
 } from '../src/views/protocol';
 import { clear, h } from './dom';
+import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
 import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
-import { SidePanel, type TabId } from './panel';
+import { isTabId, SidePanel, type TabId } from './panel';
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -169,8 +170,10 @@ const panel = new SidePanel(
     reveal: (id) => revealElement(id),
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
   },
+  // A hidden webview is rebuilt when its editor tab is shown again: start on
+  // the tab it had (the state is per editor tab), else on Details.
+  isTabId(state.tab) ? state.tab : 'details',
 );
-if (state.tab) panel.showTab(state.tab);
 
 const root = document.getElementById('root')!;
 root.append(toolbar, crumbs, banner, h('div', { class: 'main' }, stage, panel.element));
@@ -190,12 +193,15 @@ function createViewer(): NavigatedViewer {
   const v = new NavigatedViewer({
     container: canvasHost,
     keyboard: { bind: false },
+    // bpmn-js's drill-down would switch to an empty plane of the sub-process; ours opens its level (./drilldown).
+    additionalModules: [NO_BPMN_DRILLDOWN],
     bpmnRenderer: {
       defaultFillColor: color('--vscode-editor-background', '#ffffff'),
       defaultStrokeColor: color('--vscode-editor-foreground', '#000000'),
       defaultLabelColor: color('--vscode-editor-foreground', '#000000'),
     },
   });
+  keepImportedRoot(v);
   const eventBus = v.get<EventBus>('eventBus');
   eventBus.on('element.click', (e) => {
     const el = e.element;
@@ -263,9 +269,14 @@ async function render(msg: RenderMessage): Promise<void> {
       canvas().zoom('fit-viewport');
     }
     markChanges(msg);
+    // The arrow on a sub-process opens its level, like a double-click; it shows while the sub-process is selected.
+    addDrilldownArrows(viewer, msg.elements, openCallee);
     // On the same level the selected element is kept while its id exists; another level starts
     // with the selection it had when it was left, or none.
     panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });
+    // The diagram selects the same element again (its drill-down arrow with it).
+    const kept = panel.selection !== undefined ? viewer.get<ElementRegistry>('elementRegistry').get(panel.selection) : undefined;
+    if (kept) viewer.get<Selection>('selection').select(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
     overlay.hidden = true;
@@ -466,6 +477,7 @@ document.addEventListener('keydown', (e) => {
   } else if (currentPath().length > 1) {
     if (!backButton.disabled) goBack();
   } else {
+    viewer.get<Selection>('selection').select(null);
     panel.select(undefined);
   }
   e.preventDefault();

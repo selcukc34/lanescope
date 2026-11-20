@@ -16,5 +16,7 @@
     "isolatedModules": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  // Needs the DOM types: checked with the webview (webview/tsconfig.json).
+  "exclude": ["test/webview/panel.test.ts"]
 }
