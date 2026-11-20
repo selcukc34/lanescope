@@ -1,13 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-11-20
 
 ### Added
 
-- Export of the shown diagram (the chosen process, or an opened service flow or linked process) to a new file: BPMN with layout (`.bpmn` with diagram interchange), SVG or PNG. Use **Export** in the toolbar or **Lanescope: Export Diagram…** in the Command Palette. Exports keep every flow name and lane whatever the toolbar shows, never contain script code, and images are drawn in light colours whatever the theme. The save dialog opens in the folder of the last export and refuses the opened file, `.twx`, `.zip` and `.xsd` files and other extensions; the opened file is never written.
-- Four structural validation rules in the Warnings tab: `gateway-without-outgoing-flow`, `disconnected-node`, `no-path-to-end` and `activity-without-documentation`. `no-path-to-end` reports where the flow gets stuck (a dead end, or once per loop without a way out), and `activity-without-documentation` gives one line per process. Like the existing rules, they only report; nothing is changed. They run on processes only, not on service diagrams.
-- **Comparing versions** in a new **Changes** tab: what was added, removed or changed in the shown process (nodes, flows, lanes, the process itself) and in its business objects, compared with a file picked with **Compare…** (or **Lanescope: Compare With…**; the picked file is the older side, and the Changes tab opens once it is read), or, after a live refresh, with the version shown before it. Elements pair by id, then by name, then by their neighbours. **Highlight changes** in the toolbar marks added and changed elements in the diagram; a click (or Enter) on a row in the list selects the element, scrolls it into view and shows its details. **Lanescope: Clear Comparison** (or **Clear** in the tab) goes back to the previous version. Script code and mapped values are never shown, the picked file is only read, and exports hold no change marks. Processes only, not service diagrams.
-- **Sub-processes open as a diagram of their own**, like called services: **Open sub-process** in the details panel (with **Contains**: the number of nodes inside), or a double-click on the sub-process, opens its inside one level below, with the breadcrumb (**… › Sub1**). Event sub-processes open the same way, and a nested sub-process opens as one more level. The inside is drawn with the sub-process's own lanes: in a `.twx` export those of BAW's sub-process diagram (names, order, heights) with its positions; in Bob output a `bpmn:laneSet` inside the `bpmn:subProcess`, laid out automatically. `empty-lane` also reports the empty lanes of a sub-process (`Lane "X" in sub-process "Sub1" has no activities.`), and the comparison pairs them by id, else by name. An empty sub-process says **Empty sub-process**. The "is drawn collapsed; its N inner node(s) are not shown" warning is gone. At a sub-process level, the Changes tab lists the comparison of the process and marks the elements drawn there; in the process, a sub-process with changes inside it is marked changed and its row says **Inner changes: N**. Export works at a sub-process level like at any other.
+- **Structural warnings:** four new validation rules in the Warnings tab. Like the existing rules, they only report; nothing is changed. They run on processes only, not on service diagrams.
+  - `gateway-without-outgoing-flow`: a gateway has incoming flows but no outgoing flow.
+  - `disconnected-node`: a node has no incoming and no outgoing sequence flow.
+  - `no-path-to-end`: no chain of sequence flows leads to an end event; reported where the flow gets stuck (a dead end, or once per loop without a way out).
+  - `activity-without-documentation`: activities with empty documentation, as one line per process.
+- **Export:** the shown diagram (the chosen process, or an opened service flow or linked process) can be exported as BPMN with layout (`.bpmn` with diagram interchange), SVG or PNG.
+  - An export always goes to a new file; the opened file is never written. The save dialog opens in the folder of the last export and refuses the opened file, `.twx`, `.zip` and `.xsd` files and other extensions.
+  - Exports keep every flow name and lane whatever the toolbar shows, and never contain script code.
+  - Images are drawn in light colours whatever the theme.
+  - **Export** in the toolbar, or the new command **Lanescope: Export Diagram…**.
+- **Comparing versions:** a new **Changes** tab lists what was added, removed or changed in the shown process (nodes, flows, lanes, the process itself) and in its business objects, field by field.
+  - Compared with a file you pick (**Compare…** in the toolbar, or the new command **Lanescope: Compare With…**; the picked file is the older side, and the Changes tab opens once it is read), or, after a live refresh, with the version shown before it.
+  - Elements pair by id, then by name, then by their neighbours.
+  - New toolbar toggle **Highlight changes** marks added and changed elements in the diagram. A click (or Enter) on a row in the list selects the element, scrolls it into view and shows its details.
+  - The new command **Lanescope: Clear Comparison** (or **Clear** in the tab) goes back to comparing with the previous version.
+  - Script code and mapped values are never shown, the picked file is only read, and exports hold no change marks. Processes only, not service diagrams.
+- **Sub-processes open as a diagram of their own**, like called services: **Open sub-process** in the details panel (with **Contains**: the number of nodes inside), or a double-click on the sub-process, opens its inside one level below, with the breadcrumb (**… › Sub1**).
+  - Event sub-processes open the same way, and a nested sub-process opens as one more level. An empty sub-process says **Empty sub-process**.
+  - The inside is drawn with the sub-process's own lanes: in a `.twx` export those of BAW's sub-process diagram (names, order, heights) with its positions; in Bob output a `bpmn:laneSet` inside the `bpmn:subProcess`, laid out automatically.
+  - `empty-lane` also reports the empty lanes of a sub-process (`Lane "X" in sub-process "Sub1" has no activities.`). The "is drawn collapsed; its N inner node(s) are not shown" warning is gone.
+  - At a sub-process level, the Changes tab lists the comparison of the process and marks the elements drawn there; sub-process lanes pair by id, else by name. In the process, a sub-process with changes inside it is marked changed and its row says **Inner changes: N**.
+  - Export works at a sub-process level like at any other.
 
 ## 0.3.2 — 2026-11-19
 
