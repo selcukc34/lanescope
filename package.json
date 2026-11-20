@@ -165,6 +165,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "f5:prepare": "node scripts/f5-prepare.mjs",
     "vscode:prepublish": "npm run build:prod",
     "package": "vsce package --no-dependencies"
   },
