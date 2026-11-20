@@ -266,6 +266,8 @@ async function render(msg: RenderMessage): Promise<void> {
     // On the same level the selected element is kept while its id exists; another level starts
     // with the selection it had when it was left, or none.
     panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });
+    // A file was just picked with Compare…: show what it changed (kept like any tab choice).
+    if (msg.showChanges === true) panel.showTab('changes');
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -291,14 +293,19 @@ function markChanges(msg: RenderMessage): void {
   }
 }
 
-/** A row of the Changes tab was clicked: select the element, scroll to it and show its details. */
+/**
+ * A row of the Changes tab was clicked: select the element (as a click on it
+ * does), scroll it into view at the current zoom, and show its details.
+ */
 function revealElement(id: string): void {
   if (!current) return;
   const element = viewer.get<ElementRegistry>('elementRegistry').get(id);
   if (!element) return;
   viewer.get<Selection>('selection').select(element);
+  // Scrolls only when the element is (partly) out of view; the zoom stays.
   canvas().scrollToElement(element, 80);
   panel.select(id);
+  panel.showTab('details');
 }
 
 function showError(msg: ErrorMessage): void {

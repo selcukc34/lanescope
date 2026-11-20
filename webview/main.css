@@ -163,11 +163,13 @@ button {
   word-break: break-word;
 }
 
-/* Selected element in the diagram. */
-.djs-element.selected .djs-outline {
-  stroke: var(--vscode-focusBorder);
-  stroke-width: 2px;
-  visibility: visible;
+/*
+ * Selected element in the diagram. The NavigatedViewer draws no outline
+ * shapes (diagram-js's outline module is not part of it), so the selection
+ * shows as a glow around the element's own shape, on top of any diff mark.
+ */
+.djs-element.selected .djs-visual {
+  filter: drop-shadow(0 0 2px var(--vscode-focusBorder, #0078d4)) drop-shadow(0 0 3px var(--vscode-focusBorder, #0078d4));
 }
 
 /* ---- Side panel ------------------------------------------------------- */

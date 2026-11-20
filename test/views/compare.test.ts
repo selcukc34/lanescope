@@ -114,6 +114,48 @@ describe('comparison: nothing to compare yet', () => {
 });
 
 describe('comparison with a picked file', () => {
+  const groups = (r: RenderMessage) => ({
+    added: r.diff!.added.map((e) => e.label),
+    removed: r.diff!.removed.map((e) => e.label),
+    changed: r.diff!.changed.map((e) => `${e.label}: ${e.changes.join('; ')}`),
+  });
+
+  it('opened v2, compared with v1: the changes from v1 to v2', async () => {
+    const t = await opened({ content: v2, bases: { '/work/order-delivery-process.zip': v1 } });
+    t.pick('/work/order-delivery-process.zip');
+    await t.s.requestCompare();
+    expect(groups(t.last())).toEqual({
+      added: ['Task "Notify Customer SF"', 'Flow "To Order Auto Approved"'],
+      removed: ['Task "Lookup Country Info SF"', 'Flow "To Determine Order Route SF"'],
+      changed: [
+        'User task "Manager Review": Name: "Manager Approval" → "Manager Review"',
+        'User task "Handle Exception": Lane: "Operations Team" → "Order Manager"',
+        'Flow "Valid": Target: "Lookup Country Info SF" → "Determine Order Route SF"',
+        'Flow "AUTO_APPROVE": Condition: "tw.local.order.route == "AUTO_APPROVE"" → "tw.local.order.route == "AUTO_APPROVE" && tw.local.order.amount < 5000"',
+        'Flow "To Notify Customer SF": Name: "To Order Auto Approved" → "To Notify Customer SF"; Target: "Order Auto Approved" → "Notify Customer SF"',
+        'Business object "OrderRequest": Field added: priority (string); Field removed: countryRegion',
+      ],
+    });
+  });
+
+  it('opened v1, compared with v2: the picked file is the older side, so the result is mirrored', async () => {
+    const t = await opened({ content: v1, bases: { '/work/order-delivery-process.v2.zip': v2 } });
+    t.pick('/work/order-delivery-process.v2.zip');
+    await t.s.requestCompare();
+    expect(groups(t.last())).toEqual({
+      added: ['Task "Lookup Country Info SF"', 'Flow "To Determine Order Route SF"'],
+      removed: ['Task "Notify Customer SF"', 'Flow "To Order Auto Approved"'],
+      changed: [
+        'User task "Manager Approval": Name: "Manager Review" → "Manager Approval"',
+        'User task "Handle Exception": Lane: "Order Manager" → "Operations Team"',
+        'Flow "Valid": Target: "Determine Order Route SF" → "Lookup Country Info SF"',
+        'Flow "AUTO_APPROVE": Condition: "tw.local.order.route == "AUTO_APPROVE" && tw.local.order.amount < 5000" → "tw.local.order.route == "AUTO_APPROVE""',
+        'Flow "To Order Auto Approved": Name: "To Notify Customer SF" → "To Order Auto Approved"; Target: "Notify Customer SF" → "Order Auto Approved"',
+        'Business object "OrderRequest": Field added: countryRegion (string); Field removed: priority',
+      ],
+    });
+  });
+
   it('reads the picked file once and compares the shown process with it', async () => {
     const t = await opened({ content: v1, bases: { '/work/order-delivery-process.v2.zip': v2 } });
     t.pick('/work/order-delivery-process.v2.zip');
@@ -171,6 +213,40 @@ describe('comparison with a picked file', () => {
     await t.s.requestCompare();
     expect(t.renders()).toBe(1);
     expect(t.loadedBases).toEqual([]);
+  });
+});
+
+describe('Compare…: the Changes tab is shown once', () => {
+  const shows = (t: ReturnType<typeof session>) => t.posted.filter((m): m is RenderMessage => m.type === 'render').map((r) => r.showChanges ?? false);
+
+  it('flags only the render after a picked file was read', async () => {
+    const t = await opened({ content: v1, bases: { '/work/v2.zip': v2 } });
+    t.pick('/work/v2.zip');
+    await t.s.requestCompare();
+    expect(shows(t)).toEqual([false, true]);
+
+    // Not on a toggle, a reload, a webview reload, or Clear.
+    await t.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true, highlightChanges: true } });
+    await t.changed(v2);
+    await t.s.handleMessage({ type: 'ready' });
+    await t.s.clearComparison();
+    expect(shows(t)).toEqual([false, true, false, false, false, false]);
+  });
+
+  it('never flags a live refresh against the previous version', async () => {
+    const t = await opened({ content: v1 });
+    await t.changed(v2);
+    await t.changed(v1);
+    expect(shows(t)).toEqual([false, false, false]);
+  });
+
+  it('does not flag (or render) when the dialog is cancelled or the file cannot be read', async () => {
+    const t = await opened({ content: v1, bases: { '/work/broken.zip': new Error('not a zip') } });
+    t.pick(undefined);
+    await t.s.requestCompare();
+    t.pick('/work/broken.zip');
+    await t.s.requestCompare();
+    expect(shows(t)).toEqual([false]);
   });
 });
 

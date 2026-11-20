@@ -1,6 +1,7 @@
 // Text the side panel shows, kept free of DOM code so it can be unit-tested
 // in plain Node.
 
+import type { DiffEntry } from '../src/diff/diff';
 import type { CalleeStepKind } from '../src/model/model';
 import type { CalleeDetails, CalleeStepDetails, DiffView } from '../src/views/protocol';
 
@@ -60,10 +61,13 @@ export function clockTime(epochMs: number): string {
   return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
-/** "Compared with: other.zip" or "Compared with the previous version (loaded 14:32)". */
+/**
+ * "Changes from other.zip to the shown file" (the picked file is the older
+ * side) or "Compared with the previous version (loaded 14:32)".
+ */
 export function comparedWithText(diff: Pick<DiffView, 'baseKind' | 'baseLabel' | 'loadedAt'>): string {
   return diff.baseKind === 'file'
-    ? `Compared with: ${diff.baseLabel}`
+    ? `Changes from ${diff.baseLabel} to the shown file`
     : `Compared with the previous version (loaded ${clockTime(diff.loadedAt)})`;
 }
 
@@ -75,4 +79,50 @@ export function changeCount(diff: Pick<DiffView, 'counts'>): number {
 /** "Changes (7)"; just "Changes" while there is nothing to count. */
 export function changesTabTitle(diff: Pick<DiffView, 'counts' | 'note'> | undefined): string {
   return diff && diff.note === undefined ? `Changes (${changeCount(diff)})` : 'Changes';
+}
+
+export type ChangeStatus = 'added' | 'changed' | 'removed';
+
+/** One row of the Changes tab, as the panel draws it. */
+export interface ChangeRow {
+  status: ChangeStatus;
+  label: string;
+  changes: string[];
+  /** The diagram element a click selects; only added and changed nodes, flows and lanes that are drawn. */
+  revealId?: string;
+}
+
+/** The groups of the Changes tab: Added, Changed, Removed (diagram elements) and Business objects. */
+export interface ChangeGroups {
+  added: ChangeRow[];
+  changed: ChangeRow[];
+  removed: ChangeRow[];
+  businessObjects: ChangeRow[];
+}
+
+/**
+ * Rows of the Changes tab. `drawn` holds the ids of the drawn elements
+ * (RenderMessage.elements): a row links to its element only when the
+ * element is in the diagram.
+ */
+export function changeGroups(diff: Pick<DiffView, 'added' | 'changed' | 'removed'>, drawn: Readonly<Record<string, unknown>>): ChangeGroups {
+  const row = (e: DiffEntry, status: ChangeStatus): ChangeRow => {
+    const linkable =
+      status !== 'removed' &&
+      (e.elementType === 'node' || e.elementType === 'flow' || e.elementType === 'lane') &&
+      e.currentId !== undefined &&
+      Object.prototype.hasOwnProperty.call(drawn, e.currentId);
+    return { status, label: e.label, changes: [...e.changes], ...(linkable ? { revealId: e.currentId } : {}) };
+  };
+  const inDiagram = (e: DiffEntry) => e.elementType !== 'dataType';
+  return {
+    added: diff.added.filter(inDiagram).map((e) => row(e, 'added')),
+    changed: diff.changed.filter(inDiagram).map((e) => row(e, 'changed')),
+    removed: diff.removed.filter(inDiagram).map((e) => row(e, 'removed')),
+    businessObjects: [
+      ...diff.added.filter((e) => !inDiagram(e)).map((e) => row(e, 'added')),
+      ...diff.changed.filter((e) => !inDiagram(e)).map((e) => row(e, 'changed')),
+      ...diff.removed.filter((e) => !inDiagram(e)).map((e) => row(e, 'removed')),
+    ],
+  };
 }

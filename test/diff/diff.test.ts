@@ -63,6 +63,19 @@ describe('diffProcess: order-delivery v1 and v2', () => {
     expect(d.nodeMatches).toEqual({ byId: v1.processes[0].nodes.length - 1, byName: 0, byNeighbors: 0 });
   });
 
+  it('keeps the id of the retargeted flow in v2 and pairs it by that id: changed, not removed and added', () => {
+    const RETARGETED = 'bpmnid-de6141ef-60c0-5e7f-b5b5-0b0334d0ae6e';
+    const before = v1.processes[0].flows.find((f) => f.id === RETARGETED)!;
+    const after = v2.processes[0].flows.find((f) => f.id === RETARGETED)!;
+    expect([before.name, after.name]).toEqual(['To Order Auto Approved', 'To Notify Customer SF']);
+    expect(after.targetId).toBe(NOTIFY_TASK_ID);
+    for (const d of [diff(v1, v2), diff(v2, v1)]) {
+      const entry = d.changed.find((e) => e.currentId === RETARGETED);
+      expect(entry?.baseId).toBe(RETARGETED);
+      expect([...d.added, ...d.removed].some((e) => e.currentId === RETARGETED || e.baseId === RETARGETED)).toBe(false);
+    }
+  });
+
   it('marks the added and changed nodes and flows of the current version only', () => {
     const d = diff(v1, v2);
     const marked = Object.entries(d.marks).map(([id, mark]) => `${mark} ${nameOf(v2.processes[0], id)}`);

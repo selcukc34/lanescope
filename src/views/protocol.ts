@@ -277,6 +277,11 @@ export interface RenderMessage {
   loadedAt: number;
   /** The comparison with the base version; undefined while there is nothing to compare with. */
   diff?: DiffView;
+  /**
+   * Once, on the render that follows a file picked with Compare…: the webview
+   * switches its side panel to the Changes tab. Never set on any other render.
+   */
+  showChanges?: true;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */

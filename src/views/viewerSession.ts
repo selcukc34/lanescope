@@ -361,7 +361,7 @@ export class ViewerSession {
     }
     if (this.disposed) return true;
     this.fileBase = { kind: 'file', loaded: { pkg, loadedAt: this.now() }, label };
-    this.pending = this.run('compare');
+    this.pending = this.run('compare', undefined, true);
     await this.pending;
     return true;
   }
@@ -445,7 +445,8 @@ export class ViewerSession {
     }
   }
 
-  private async run(mode: RunMode, open?: OpenCalleeMessage): Promise<void> {
+  /** @param showChanges the user just picked a file to compare with: have the webview show the Changes tab. */
+  private async run(mode: RunMode, open?: OpenCalleeMessage, showChanges = false): Promise<void> {
     const generation = ++this.generation;
     if (mode === 'reload') this.loaded = undefined;
     // A toggle, a settings change, a new base, a process switch or a navigation while the file is broken redraws the last good package.
@@ -497,7 +498,8 @@ export class ViewerSession {
       this.good = result;
       this.below = result.below;
       if (!fromGood) this.failure = undefined;
-      this.post(result.render);
+      // showChanges is for this render only: the kept render (re-sent to a reloaded webview) has none.
+      this.post(showChanges ? { ...result.render, showChanges: true } : result.render);
       if (this.failure) this.post(this.banner(this.failure));
     } else {
       this.failure = result;

@@ -3,7 +3,6 @@
 // Everything from the model (scripts, mappings, conditions included) is set
 // as text (textContent / text nodes), never parsed as HTML, and never run.
 
-import type { DiffEntry } from '../src/diff/diff';
 import type {
   CalleeDetails,
   CalleeStepDetails,
@@ -29,7 +28,9 @@ import {
   catchesLabel,
   catchesText,
   changeCount,
+  changeGroups,
   changesTabTitle,
+  type ChangeRow,
   comparedWithText,
   insideSummary,
   isLinkedType,
@@ -218,24 +219,20 @@ export class SidePanel {
       body.append(h('p', { class: 'empty' }, 'No changes.'));
       return;
     }
-    const inDiagram = (e: DiffEntry) => e.elementType !== 'dataType';
-    const row = (e: DiffEntry, status: 'added' | 'changed' | 'removed', badge: boolean) => this.changeRow(data, e, status, badge);
-    const group = (title: string, rows: HTMLElement[]) =>
-      rows.length > 0 ? h('section', { class: 'changes' }, h('h3', {}, `${title} (${rows.length})`), h('ul', { class: 'change-list' }, ...rows)) : null;
-    const types = [
-      ...diff.added.filter((e) => !inDiagram(e)).map((e) => row(e, 'added', true)),
-      ...diff.changed.filter((e) => !inDiagram(e)).map((e) => row(e, 'changed', true)),
-      ...diff.removed.filter((e) => !inDiagram(e)).map((e) => row(e, 'removed', true)),
-    ];
+    const groups = changeGroups(diff, data.elements);
+    const group = (title: string, rows: ChangeRow[], badge: boolean) =>
+      rows.length > 0
+        ? h('section', { class: 'changes' }, h('h3', {}, `${title} (${rows.length})`), h('ul', { class: 'change-list' }, ...rows.map((r) => this.changeRow(r, badge))))
+        : null;
     body.append(
       ...[
-        group('Added', diff.added.filter(inDiagram).map((e) => row(e, 'added', false))),
-        group('Changed', diff.changed.filter(inDiagram).map((e) => row(e, 'changed', false))),
-        group('Removed', diff.removed.filter(inDiagram).map((e) => row(e, 'removed', false))),
-        group('Business objects', types),
+        group('Added', groups.added, false),
+        group('Changed', groups.changed, false),
+        group('Removed', groups.removed, false),
+        group('Business objects', groups.businessObjects, true),
       ].filter((x): x is HTMLElement => x !== null),
     );
-    if (diff.removed.some(inDiagram)) body.append(h('p', { class: 'hint' }, 'Removed elements are not drawn.'));
+    if (groups.removed.length > 0) body.append(h('p', { class: 'hint' }, 'Removed elements are not drawn.'));
   }
 
   private comparedWith(diff: DiffView): HTMLElement {
@@ -249,22 +246,23 @@ export class SidePanel {
     return h('div', { class: 'compared-with' }, text, clearButton);
   }
 
-  /** One entry: its label (a link to the element when it is drawn) and its change lines. */
-  private changeRow(data: RenderMessage, e: DiffEntry, status: 'added' | 'changed' | 'removed', badge: boolean): HTMLElement {
-    const id = e.currentId;
+  /** One entry: its label (a button that selects the element, when it is drawn) and its change lines. */
+  private changeRow(r: ChangeRow, badge: boolean): HTMLElement {
     let label: HTMLElement;
-    if (status !== 'removed' && id !== undefined && e.elementType !== 'dataType' && e.elementType !== 'process' && data.elements[id]) {
-      const link = h('button', { class: 'link', type: 'button', title: 'Select in the diagram' }, e.label);
+    const id = r.revealId;
+    if (id !== undefined) {
+      // A real button: mouse, Enter and Space all work; the listener is bound each time the list is drawn.
+      const link = h('button', { class: 'link', type: 'button', title: 'Select in the diagram and show its details' }, r.label);
       link.addEventListener('click', () => this.changes.reveal(id));
       label = link;
     } else {
-      label = h('span', {}, e.label);
+      label = h('span', { class: 'change-label' }, r.label);
     }
     return h(
       'li',
-      { class: `change ${status}` },
-      h('div', { class: 'change-line' }, badge ? h('span', { class: `badge kind diff-${status}` }, STATUS_LABELS[status]) : null, label),
-      e.changes.length > 0 ? h('ul', { class: 'change-details' }, ...e.changes.map((c) => h('li', {}, c))) : null,
+      { class: `change ${r.status}` },
+      h('div', { class: 'change-line' }, badge ? h('span', { class: `badge kind diff-${r.status}` }, STATUS_LABELS[r.status]) : null, label),
+      r.changes.length > 0 ? h('ul', { class: 'change-details' }, ...r.changes.map((c) => h('li', {}, c))) : null,
     );
   }
 
