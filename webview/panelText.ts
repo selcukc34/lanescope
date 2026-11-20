@@ -3,7 +3,8 @@
 
 import type { DiffEntry } from '../src/diff/diff';
 import type { CalleeStepKind } from '../src/model/model';
-import type { CalleeDetails, CalleeStepDetails, DiffView } from '../src/views/protocol';
+import type { CalleeDetails, CalleeStepDetails, DiffView, TraceView } from '../src/views/protocol';
+import type { TraceRow, TraceStatus } from '../src/trace/trace';
 
 /**
  * A type is a link only when the Data tab has a row for it. System Data
@@ -134,4 +135,51 @@ export function changeGroups(
 /** "Contains" of a sub-process: "4 nodes", "1 node". */
 export function containsText(count: number): string {
   return `${count} ${count === 1 ? 'node' : 'nodes'}`;
+}
+
+/** Icon of a trace row by its status. */
+export const TRACE_ICONS: Readonly<Record<TraceStatus, string>> = {
+  matched: '✓',
+  near: '≈',
+  missing: '✗',
+  unchecked: '?',
+  extra: '+',
+};
+
+export const TRACE_STATUS_LABELS: Readonly<Record<TraceStatus, string>> = {
+  matched: 'Matched',
+  near: 'Near match',
+  missing: 'Missing',
+  unchecked: 'Not checked',
+  extra: 'Not in the description',
+};
+
+/** The rows of the Trace tab by group, in the order the groups first appear. */
+export function traceGroups(rows: readonly TraceRow[]): Array<{ title: string; rows: TraceRow[] }> {
+  const groups = new Map<string, TraceRow[]>();
+  for (const r of rows) {
+    const list = groups.get(r.group) ?? [];
+    list.push(r);
+    groups.set(r.group, list);
+  }
+  return [...groups].map(([title, list]) => ({ title, rows: list }));
+}
+
+/** The second line of a trace row: "matched as 'Validate Order SF'" for a near match, else the row's note. */
+export function traceDetail(row: TraceRow): string {
+  if (row.status === 'near' && row.target && row.target.name !== '') return `matched as '${row.target.name}'`;
+  return row.note;
+}
+
+/** "Trace (1 missing)", "Trace (2 extra)" or just "Trace": what needs a look. */
+export function traceTabTitle(trace: Pick<TraceView, 'counts' | 'error'> | undefined): string {
+  if (!trace || trace.error !== undefined) return 'Trace';
+  const open = trace.counts.missing + trace.counts.extra;
+  return open > 0 ? `Trace (${open})` : 'Trace';
+}
+
+/** "5 sections not checked: Business scenario, …" */
+export function notCheckedText(headings: readonly string[]): string {
+  if (headings.length === 0) return '';
+  return `${headings.length} ${headings.length === 1 ? 'section' : 'sections'} not checked: ${headings.join(', ')}`;
 }

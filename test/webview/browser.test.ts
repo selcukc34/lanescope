@@ -1,7 +1,7 @@
 // The webview bundle in a real browser, with the real bpmn-js and the real
 // Content Security Policy: what unit tests of the host cannot see (diff
 // markers on the canvas, the Changes tab, a click or Enter on one of its
-// rows selecting the element). Runs headless Chrome over the DevTools
+// rows selecting the element, the Trace tab and its rows). Runs headless Chrome over the DevTools
 // protocol with Node's own fetch and WebSocket, so it needs no dependency.
 //
 // Skipped where Chrome is not found (CI). Set LANESCOPE_CHROME to the
@@ -22,6 +22,29 @@ import { ViewerSession } from '../../src/views/viewerSession';
 import { buildCsp } from '../../src/views/webviewHtml';
 import { NOTIFY_TASK_ID, V1_ZIP, V2_ZIP } from '../bobV2';
 import { syntheticTwxPackage } from '../syntheticTwx';
+
+const DESCRIPTION_MD = path.join(__dirname, '..', 'fixtures', 'bob', 'order-delivery-process-description.md');
+
+/**
+ * Renders of a package with a description attached: the first one (as found
+ * next to the file), the one after a pick (with showTrace), and the level a
+ * message from the webview opens.
+ */
+async function traceRenders(pkg: ProcessPackage, md: string) {
+  const renders: RenderMessage[] = [];
+  const s = new ViewerSession({
+    fileName: 'order.zip',
+    load: async () => pkg,
+    post: (m) => void (m.type === 'render' && renders.push(m)),
+    descriptions: { read: async () => md, attached: () => undefined },
+  });
+  await s.handleMessage({ type: 'ready' });
+  await s.setDescription('/work/order-description.md');
+  const found = renders[renders.length - 1];
+  await s.setDescription('/work/order-description.md', true);
+  const picked = renders[renders.length - 1];
+  return { found, picked, open: async (msg: unknown) => (await s.handleMessage(msg), renders[renders.length - 1]) };
+}
 
 const MAC_CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CHROME = process.env.LANESCOPE_CHROME ?? (existsSync(MAC_CHROME) ? MAC_CHROME : undefined);
@@ -179,6 +202,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   let subRender: RenderMessage;
   /** SUB_BPMN: a sub-process that opens and an empty one. */
   let drillRender: RenderMessage;
+  let trace: Awaited<ReturnType<typeof traceRenders>>;
+  let subTrace: Awaited<ReturnType<typeof traceRenders>>;
 
   beforeAll(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'lanescope-browser-'));
@@ -213,6 +238,11 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
     );
     ({ withShow: subRender } = await renderOf(renamed, await syntheticTwxPackage({ subProcess: true })));
+    trace = await traceRenders(v1, readFileSync(DESCRIPTION_MD, 'utf8'));
+    subTrace = await traceRenders(
+      await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
+      '## Steps\n- Prepare\n- Pick Items\n',
+    );
 
     const profile = path.join(dir, 'profile');
     chrome = spawn(CHROME!, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--allow-file-access-from-files', '--no-first-run', '--window-size=1400,900', 'about:blank'], {
@@ -399,6 +429,92 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   it('opens Details when the saved tab is not one it knows', async () => {
     await page.open(`${url}?state=${encodeURIComponent(JSON.stringify({ tab: 'settings' }))}`, renderAgain);
     expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Details');
+  });
+
+  it('hides the Trace tab while no description is attached', async () => {
+    await page.open(url, renderAgain);
+    expect(await page.eval<boolean>(`document.getElementById('tab-trace').hidden`)).toBe(true);
+  });
+
+  it('shows the Trace tab with a found description, without switching to it', async () => {
+    await page.open(url, trace.found);
+    const shown = await page.eval<{ hidden: boolean; active: string; summary: string; file: string; groups: string[]; errors: string[] }>(`({
+      hidden: document.getElementById('tab-trace').hidden,
+      active: document.querySelector('.tab.active').textContent,
+      summary: document.querySelector('.trace-summary').textContent,
+      file: document.querySelector('.trace-file').textContent,
+      groups: [...document.querySelectorAll('.trace h3')].map((h) => h.textContent),
+      errors: window.__errors,
+    })`);
+    expect(shown).toEqual({
+      hidden: false,
+      active: 'Details',
+      summary: '19 of 41 matched · 5 near · 0 missing · 17 unchecked · 1 extra',
+      file: 'Checked against order-description.md',
+      groups: [
+        'Main process steps',
+        'Gateway paths · after Determine Order Route',
+        'Business object · OrderRequest',
+        'Human tasks · Manager Approval',
+        'Human tasks · Compliance Review',
+        'Human tasks · Handle Exception',
+        'Not in the description',
+      ],
+      errors: [],
+    });
+    // No marks on the canvas.
+    expect(await page.eval<number>(`document.querySelectorAll('.ls-diff-added, .ls-diff-changed').length`)).toBe(0);
+  });
+
+  it('opens the Trace tab after a pick and shows icons and near matches', async () => {
+    await page.open(url, trace.picked);
+    const rows = await page.eval<string[][]>(
+      `[...document.querySelectorAll('.trace-row')].slice(0, 3).map((r) => [r.querySelector('.trace-icon').textContent, r.querySelector('.trace-body > :first-child').textContent, r.querySelector('.trace-detail').textContent])`,
+    );
+    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Trace (1)');
+    expect(rows).toEqual([
+      ['≈', 'Submit Order', "matched as 'Order Submitted'"],
+      ['≈', 'Validate Order', "matched as 'Validate Order SF'"],
+      ['≈', 'Lookup Country Info', "matched as 'Lookup Country Info SF'"],
+    ]);
+  });
+
+  it('selects the node of a clicked row and shows its details', async () => {
+    await page.open(url, trace.picked);
+    await page.clickButton('Validate Order');
+    const after = await page.eval<{ selected: string[]; details: string; tab: string }>(`({
+      selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+      details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+      tab: document.querySelector('.tab.active').textContent,
+    })`);
+    const id = trace.picked.trace!.rows.find((r) => r.text === 'Validate Order')!.target as { id: string };
+    expect(after).toEqual({ selected: [id.id], details: 'Validate Order SF', tab: 'Details' });
+  });
+
+  it('opens the sub-process level of a row inside a sub-process, then selects the node there', async () => {
+    await page.open(url, subTrace.picked);
+    await page.eval('window.__posted.length = 0');
+    await page.clickButton('Pick Items');
+    const posted = await page.eval<unknown[]>('window.__posted');
+    expect(posted).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
+    const level = await subTrace.open(posted[0]);
+    expect(level.path.map((l) => l.id)).toEqual(['order', 'sub:prepare']);
+    await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+    expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual(['pick']);
+    expect(await page.eval<string>(`document.querySelector('[aria-labelledby="tab-details"] h2').textContent`)).toBe('Pick Items');
+  });
+
+  it('Clear in the Trace tab asks the host to stop the check', async () => {
+    await page.open(url, trace.picked);
+    await page.eval('window.__posted.length = 0');
+    await page.clickButton('Clear');
+    expect(await page.eval<unknown[]>('window.__posted')).toEqual([{ type: 'clearDescription' }]);
+    // The next render has no trace: the tab goes, Details comes back.
+    await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...renderAgain, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+    expect(await page.eval<{ hidden: boolean; active: string }>(`({ hidden: document.getElementById('tab-trace').hidden, active: document.querySelector('.tab.active').textContent })`)).toEqual({
+      hidden: true,
+      active: 'Details',
+    });
   });
 
   it('keeps the chosen tab on a render without the Compare… flag', async () => {

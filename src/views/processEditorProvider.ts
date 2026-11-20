@@ -3,7 +3,8 @@
 // to the opened file: exports go to a new file picked in a save dialog and
 // checked by ./exportFiles (never the input, never an input type). A file
 // picked to compare with is read the same way as the opened one, and never
-// written or watched.
+// written or watched. A description (Markdown) checked against the process is
+// read and watched, never written.
 
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
@@ -20,8 +21,9 @@ import {
   EXPORT_LABELS,
 } from './exportFiles';
 import { EXPORT_FORMATS, type ExportFormat, type HostMessage, type ViewerSettings } from './protocol';
-import { ViewerSession, type CompareHost, type ExportHost } from './viewerSession';
-import { isWatchedChange, watchPatternFor } from './watchPattern';
+import { ViewerSession, type CompareHost, type DescriptionHost, type ExportHost } from './viewerSession';
+import { descriptionCandidates, isWatchedChange, watchPatternFor } from './watchPattern';
+import { MAX_DESCRIPTION_BYTES } from '../trace/description';
 import { buildWebviewHtml, createNonce } from './webviewHtml';
 
 export const VIEW_TYPE = 'lanescope.processViewer';
@@ -29,6 +31,10 @@ export const OPEN_COMMAND = 'lanescope.open';
 export const EXPORT_COMMAND = 'lanescope.export';
 export const COMPARE_COMMAND = 'lanescope.compare';
 export const CLEAR_COMPARISON_COMMAND = 'lanescope.clearComparison';
+export const CHECK_DESCRIPTION_COMMAND = 'lanescope.checkDescription';
+export const CLEAR_DESCRIPTION_COMMAND = 'lanescope.clearDescription';
+/** Workspace state key prefix of the description attached to a file (by its URI); null: the user cleared it. */
+const DESCRIPTION_KEY_PREFIX = 'lanescope.description:';
 /** Memento key of the folder the last export was written to. */
 const LAST_EXPORT_FOLDER_KEY = 'lanescope.lastExportFolder';
 export const CONFIG_SECTION = 'lanescope';
@@ -46,11 +52,15 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       vscode.commands.registerCommand(EXPORT_COMMAND, () => provider.exportActive()),
       vscode.commands.registerCommand(COMPARE_COMMAND, () => provider.compareActive()),
       vscode.commands.registerCommand(CLEAR_COMPARISON_COMMAND, () => provider.clearActive()),
+      vscode.commands.registerCommand(CHECK_DESCRIPTION_COMMAND, () => provider.checkDescriptionActive()),
+      vscode.commands.registerCommand(CLEAR_DESCRIPTION_COMMAND, () => provider.clearDescriptionActive()),
     );
   }
 
   /** Session of every open viewer panel. */
   private readonly sessions = new Map<vscode.WebviewPanel, ViewerSession>();
+  /** The opened file of every open viewer panel. */
+  private readonly documents = new Map<vscode.WebviewPanel, vscode.Uri>();
 
   private readonly extensionUri: vscode.Uri;
 
@@ -77,6 +87,60 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
     if (!(await session.requestCompare())) {
       void vscode.window.showInformationMessage('There is no diagram to compare: it could not be drawn.');
     }
+  }
+
+  /** Lanescope: Check Against Description…: picks a Markdown description and shows the Trace tab. */
+  private async checkDescriptionActive(): Promise<void> {
+    const active = [...this.sessions].find(([panel]) => panel.active);
+    const uri = active ? this.documents.get(active[0]) : undefined;
+    if (!active || !uri) {
+      void vscode.window.showInformationMessage('Open a diagram in Lanescope to check it against a description.');
+      return;
+    }
+    const session = active[1];
+    const current = session.descriptionPath;
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      canSelectFolders: false,
+      defaultUri: current ? vscode.Uri.file(current) : uri.scheme === 'file' ? vscode.Uri.file(path.dirname(uri.fsPath)) : undefined,
+      openLabel: 'Check',
+      title: `Check ${path.basename(uri.path)} Against Description`,
+      filters: { 'Markdown description': ['md', 'markdown'] },
+    });
+    const md = picked?.[0];
+    if (!md) return;
+    if (md.scheme !== 'file') {
+      void vscode.window.showErrorMessage('Lanescope can read local description files only.');
+      return;
+    }
+    await session.setDescription(md.fsPath, true);
+  }
+
+  /** Lanescope: Clear Description Check. */
+  private async clearDescriptionActive(): Promise<void> {
+    const session = this.activeSession();
+    if (!session?.descriptionPath) {
+      void vscode.window.showInformationMessage('The diagram is not checked against a description.');
+      return;
+    }
+    await session.clearDescription();
+  }
+
+  /**
+   * The description a file opens with: the one remembered for it (unless the
+   * user cleared it), else, when lanescope.trace.autoDetectDescription is on,
+   * <base>-description.md or <base>.md next to it.
+   */
+  private async initialDescription(uri: vscode.Uri): Promise<string | undefined> {
+    if (uri.scheme !== 'file') return undefined;
+    const remembered = this.context.workspaceState.get<string | null>(DESCRIPTION_KEY_PREFIX + uri.toString());
+    if (remembered === null) return undefined;
+    if (typeof remembered === 'string' && (await fileExists(remembered))) return remembered;
+    if (!vscode.workspace.getConfiguration(CONFIG_SECTION).get<boolean>('trace.autoDetectDescription', true)) return undefined;
+    for (const candidate of descriptionCandidates(uri.fsPath)) {
+      if (await fileExists(candidate)) return candidate;
+    }
+    return undefined;
   }
 
   /** Lanescope: Clear Comparison: back to comparing with the previous version. */
@@ -120,6 +184,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
     webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
 
     const fileName = path.basename(document.uri.path);
+    let descriptionWatcher: vscode.Disposable | undefined;
     const session = new ViewerSession({
       fileName,
       load: () => loadPackage(document.uri),
@@ -127,8 +192,14 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       settings: readSettings(),
       exporter: exportHost(document.uri, () => this.exportState()),
       comparer: compareHost(document.uri),
+      descriptions: descriptionHost((filePath, byUser) => {
+        descriptionWatcher?.dispose();
+        descriptionWatcher = filePath ? watchFile(filePath, () => session.descriptionChanged()) : undefined;
+        if (byUser) void this.context.workspaceState.update(DESCRIPTION_KEY_PREFIX + document.uri.toString(), filePath ?? null);
+      }),
     });
     this.sessions.set(panel, session);
+    this.documents.set(panel, document.uri);
     // Listen before setting the HTML so the webview's "ready" is never missed.
     const listener = webview.onDidReceiveMessage((msg: unknown) => void session.handleMessage(msg));
     const watcher = watchForChanges(document.uri, () => session.fileChanged());
@@ -137,13 +208,17 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
     });
     panel.onDidDispose(() => {
       this.sessions.delete(panel);
+      this.documents.delete(panel);
       session.dispose();
       watcher?.dispose();
+      descriptionWatcher?.dispose();
       config.dispose();
       listener.dispose();
     });
     // Load while the webview boots; the result is posted once it says "ready".
     void session.start();
+    // A remembered or found description is attached without switching tabs.
+    void this.initialDescription(document.uri).then((md) => (md ? session.setDescription(md) : undefined));
 
     webview.html = buildWebviewHtml({
       cspSource: webview.cspSource,
@@ -232,6 +307,31 @@ function compareHost(source: vscode.Uri): CompareHost {
       void vscode.window.showErrorMessage(message);
     },
   };
+}
+
+/**
+ * Read-only access to description files: a local file of at most
+ * MAX_DESCRIPTION_BYTES, read as UTF-8. `attached` hears every attach and clear.
+ */
+function descriptionHost(attached: DescriptionHost['attached']): DescriptionHost {
+  return {
+    async read(filePath) {
+      const uri = vscode.Uri.file(filePath);
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.size > MAX_DESCRIPTION_BYTES) throw new Error(`it is larger than ${MAX_DESCRIPTION_BYTES / (1024 * 1024)} MB`);
+      return new TextDecoder('utf-8').decode(await vscode.workspace.fs.readFile(uri));
+    },
+    attached,
+  };
+}
+
+/** Watches one file (change, create, delete) through a watcher on its directory. Only reads file events. */
+function watchFile(filePath: string, onChange: () => void): vscode.Disposable {
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(filePath)), '*'));
+  const handle = (changed: vscode.Uri) => {
+    if (changed.scheme === 'file' && changed.fsPath === filePath) onChange();
+  };
+  return vscode.Disposable.from(watcher, watcher.onDidChange(handle), watcher.onDidCreate(handle), watcher.onDidDelete(handle));
 }
 
 async function showExported(uri: vscode.Uri, format: ExportFormat): Promise<void> {

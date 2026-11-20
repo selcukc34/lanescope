@@ -27,10 +27,11 @@ All code, comments, UI text, commit messages and docs are written in English.
 | `src/twx/` | TWX import |
 | `src/validate/` | Validation |
 | `src/diff/` | Version comparison |
+| `src/trace/` | Description traceability check |
 | `src/views/` | Custom editor |
 | `webview/` | bpmn-js UI |
 
-Parsing, model, layout, validation and comparison code (`src/input`, `src/model`, `src/bpmn`, `src/xsd`, `src/twx`, `src/validate`, `src/diff`) must **not** import the `vscode` module, so it is unit-testable in plain Node. ESLint enforces this.
+Parsing, model, layout, validation, comparison and trace code (`src/input`, `src/model`, `src/bpmn`, `src/xsd`, `src/twx`, `src/validate`, `src/diff`, `src/trace`) must **not** import the `vscode` module, so it is unit-testable in plain Node. ESLint enforces this.
 
 ## Libraries
 

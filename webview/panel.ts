@@ -1,5 +1,5 @@
-// Side panel: element details, XSD data types, warnings and the changes
-// against the compared version.
+// Side panel: element details, XSD data types, warnings, the changes
+// against the compared version and the check against a description.
 // Everything from the model (scripts, mappings, conditions included) is set
 // as text (textContent / text nodes), never parsed as HTML, and never run.
 
@@ -19,10 +19,12 @@ import type {
   RenderMessage,
   ScriptDetails,
   TimerDetails,
+  TraceView,
   UserTaskDetails,
   VariableDetails,
 } from '../src/views/protocol';
 import type { DataType } from '../src/model/model';
+import type { TraceRow, TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import {
   catchesLabel,
@@ -36,11 +38,17 @@ import {
   insideSummary,
   isLinkedType,
   NOTHING_TO_COMPARE,
+  notCheckedText,
   STEP_KIND_LABELS,
   stepNote,
+  TRACE_ICONS,
+  TRACE_STATUS_LABELS,
+  traceDetail,
+  traceGroups,
+  traceTabTitle,
 } from './panelText';
 
-export const TAB_IDS = ['details', 'data', 'warnings', 'changes'] as const;
+export const TAB_IDS = ['details', 'data', 'warnings', 'changes', 'trace'] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 /** True for a known tab id; a saved webview state may hold anything. */
@@ -54,6 +62,10 @@ export interface ChangesActions {
   reveal(id: string): void;
   /** Stop comparing with the picked file. */
   clearComparison(): void;
+  /** Select a node or flow of the chosen process, opening the sub-processes around it. */
+  revealTrace(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void;
+  /** Stop checking against the description. */
+  clearDescription(): void;
 }
 
 /** Types that have a row in the Data tab, and how to show one there. */
@@ -96,6 +108,7 @@ export class SidePanel {
       ['data', 'Data'],
       ['warnings', 'Warnings'],
       ['changes', 'Changes'],
+      ['trace', 'Trace'],
     ] as Array<[TabId, string]>) {
       const button = h('button', { class: 'tab', role: 'tab', type: 'button', id: `tab-${id}` }, label);
       button.addEventListener('click', () => this.showTab(id));
@@ -104,6 +117,8 @@ export class SidePanel {
       bodies.append(body);
       this.tabs.set(id, { button, body });
     }
+    // Shown once a render carries a description check.
+    this.tabs.get('trace')!.button.hidden = true;
     this.element = h('aside', { class: 'panel' }, tabBar, bodies);
     this.applyTab(initialTab);
   }
@@ -137,6 +152,7 @@ export class SidePanel {
     this.renderData(data.dataTypes);
     this.renderWarnings([...data.warnings, ...importWarnings]);
     this.renderChanges(data);
+    this.renderTrace(data.trace);
     const id = selection ? selection.id : this.selectedId;
     this.select(id && data.elements[id] ? id : undefined);
   }
@@ -277,6 +293,59 @@ export class SidePanel {
       { class: `change ${r.status}` },
       h('div', { class: 'change-line' }, badge ? h('span', { class: `badge kind diff-${r.status}` }, STATUS_LABELS[r.status]) : null, label),
       r.changes.length > 0 ? h('ul', { class: 'change-details' }, ...r.changes.map((c) => h('li', {}, c))) : null,
+    );
+  }
+
+  /** The Trace tab: there only while a description is attached. */
+  private renderTrace(trace: TraceView | undefined): void {
+    const { button, body } = this.tabs.get('trace')!;
+    button.hidden = trace === undefined;
+    button.textContent = traceTabTitle(trace);
+    button.classList.toggle('has-changes', trace !== undefined && trace.error === undefined && trace.counts.missing + trace.counts.extra > 0);
+    clear(body);
+    if (!trace) {
+      // The description was cleared while its tab was shown.
+      if (this.active === 'trace') this.showTab('details');
+      return;
+    }
+    const clearButton = h('button', { class: 'button small', type: 'button', title: 'Stop checking against this description' }, 'Clear');
+    clearButton.addEventListener('click', () => this.changes.clearDescription());
+    body.append(
+      h('div', { class: 'compared-with' }, h('span', { class: 'trace-file', title: 'Description the process is checked against' }, `Checked against ${trace.fileName}`), clearButton),
+    );
+    if (trace.error !== undefined) {
+      body.append(h('p', { class: 'hint trace-error' }, trace.error));
+      return;
+    }
+    body.append(h('p', { class: 'trace-summary' }, trace.summary));
+    if (trace.rows.length === 0) body.append(h('p', { class: 'empty' }, 'The description has no steps, gateway paths, business objects or human tasks to check.'));
+    for (const group of traceGroups(trace.rows)) {
+      body.append(h('section', { class: 'trace' }, h('h3', {}, group.title), h('ul', { class: 'trace-list' }, ...group.rows.map((r) => this.traceRow(r)))));
+    }
+    const notChecked = notCheckedText(trace.notChecked);
+    if (notChecked) body.append(h('p', { class: 'hint' }, notChecked));
+  }
+
+  /** One row: icon, the description's text (a button when it points at something) and the match or reason. */
+  private traceRow(r: TraceRow): HTMLElement {
+    const target = r.target;
+    let label: HTMLElement;
+    if (target && (target.type === 'node' || target.type === 'flow')) {
+      label = h('button', { class: 'link', type: 'button', title: 'Select in the diagram and show its details' }, r.text);
+      label.addEventListener('click', () => this.changes.revealTrace(target));
+    } else if (target && target.type === 'field') {
+      const type = target.dataType;
+      label = h('button', { class: 'link', type: 'button', title: 'Show in Data tab' }, r.text);
+      label.addEventListener('click', () => this.revealType(type));
+    } else {
+      label = h('span', { class: 'trace-text' }, r.text);
+    }
+    const lineInfo = r.line !== undefined ? ` (line ${r.line})` : '';
+    return h(
+      'li',
+      { class: `trace-row ${r.status}`, 'data-status': r.status },
+      h('span', { class: 'trace-icon', title: TRACE_STATUS_LABELS[r.status], 'aria-label': TRACE_STATUS_LABELS[r.status] }, TRACE_ICONS[r.status]),
+      h('span', { class: 'trace-body' }, label, h('span', { class: 'trace-detail muted', title: `${r.note}${lineInfo}` }, traceDetail(r))),
     );
   }
 

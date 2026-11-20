@@ -101,12 +101,19 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     ).toEqual([]);
   });
 
-  it('contributes four commands: open a file, export the shown diagram to a new file, compare with a file and clear that', () => {
+  it('contributes six commands: open a file, export the shown diagram to a new file, compare with a file and clear that, check against a description and clear that', () => {
     const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string }>; menus: { commandPalette: Array<{ command: string; when?: string }> } };
     };
-    expect(pkg.contributes.commands.map((c) => c.command)).toEqual(['lanescope.open', 'lanescope.export', 'lanescope.compare', 'lanescope.clearComparison']);
-    for (const command of ['lanescope.export', 'lanescope.compare', 'lanescope.clearComparison']) {
+    expect(pkg.contributes.commands.map((c) => c.command)).toEqual([
+      'lanescope.open',
+      'lanescope.export',
+      'lanescope.compare',
+      'lanescope.clearComparison',
+      'lanescope.checkDescription',
+      'lanescope.clearDescription',
+    ]);
+    for (const command of ['lanescope.export', 'lanescope.compare', 'lanescope.clearComparison', 'lanescope.checkDescription', 'lanescope.clearDescription']) {
       expect(pkg.contributes.menus.commandPalette).toContainEqual({ command, when: 'activeCustomEditorId == lanescope.processViewer' });
     }
   });
@@ -114,7 +121,17 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
   it('reads the file to compare with through the same loader as the opened file, and never watches it', () => {
     const provider = readFileSync(path.join(ROOT, 'src/views/processEditorProvider.ts'), 'utf8');
     expect(provider).toContain('loadBase: (filePath) => loadPackage(vscode.Uri.file(filePath)),');
-    // One watcher: the opened file's.
-    expect(provider.match(/createFileSystemWatcher\(/g)).toHaveLength(1);
+    // Two watchers: the opened file's, and the attached description's (watchFile). The base is never watched.
+    expect(provider.match(/createFileSystemWatcher\(/g)).toHaveLength(2);
+    expect(provider.match(/watchFile\(/g)).toHaveLength(2);
+    expect(provider).toContain('watchFile(filePath, () => session.descriptionChanged())');
+  });
+
+  it('reads a description only: a local file of at most 1 MB, through readFile', () => {
+    const provider = code(path.join('src', 'views', 'processEditorProvider.ts'));
+    const host = provider.slice(provider.indexOf('function descriptionHost('), provider.indexOf('function watchFile('));
+    expect(host).toContain('if (stat.size > MAX_DESCRIPTION_BYTES)');
+    expect(host).toContain('await vscode.workspace.fs.readFile(uri)');
+    expect(host).not.toMatch(/writeFile|delete|rename/);
   });
 });

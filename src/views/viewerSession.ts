@@ -55,6 +55,13 @@
 // process gets a note instead. A sub-process opened from the chosen process
 // (at any depth, through sub-processes only) shows the comparison of the
 // chosen process; its marks fall on the elements drawn there.
+//
+// Description check: a Markdown description attached with setDescription()
+// (picked by the user, or found next to the opened file) is read through
+// DescriptionHost, never written, and checked against the chosen process
+// (src/trace) on every render. descriptionChanged() re-reads it after the
+// same quiet period as the file and redraws the shown package. It does not
+// touch the comparison, the warnings or the exports.
 
 import * as path from 'node:path';
 import { diffProcess, matchProcess } from '../diff/diff';
@@ -63,6 +70,8 @@ import { BPMN_EXPORT_COMMENT } from './exportFiles';
 import type { Process, ProcessPackage } from '../model/model';
 import { findSubProcess, isSubProcessLevelId, SUB_LEVEL_PREFIX, subProcessDiagram, subProcessLevelId } from '../model/subProcess';
 import { MAX_PATH_DEPTH, openInPath, resolvePath } from './navigation';
+import { parseDescription, type ProcessDescription } from '../trace/description';
+import { checkTrace, traceSummary } from '../trace/trace';
 import {
   DEFAULT_VIEW_OPTIONS,
   DEFAULT_VIEWER_SETTINGS,
@@ -76,6 +85,7 @@ import {
   type LevelSummary,
   type OpenCalleeMessage,
   type RenderMessage,
+  type TraceView,
   type ViewerSettings,
   type ViewOptions,
 } from './protocol';
@@ -111,6 +121,24 @@ export interface ViewerSessionDeps {
   exporter?: ExportHost;
   /** Asks for a file to compare with and reads it; without it only the previous version is compared. */
   comparer?: CompareHost;
+  /** Reads an attached description and hears when one is attached or cleared. */
+  descriptions?: DescriptionHost;
+}
+
+/** The editor side of the description check (file read, remembering, watching). */
+export interface DescriptionHost {
+  /** Reads the description's text. Never writes. */
+  read(filePath: string): Promise<string>;
+  /** A description was attached (a path) or cleared (undefined); `byUser` when the user asked for it. */
+  attached(filePath: string | undefined, byUser: boolean): void;
+}
+
+/** An attached description, as last read. */
+interface AttachedDescription {
+  path: string;
+  fileName: string;
+  parsed?: ProcessDescription;
+  error?: string;
 }
 
 /** The editor side of Compare… (open dialog, read-only load, messages). */
@@ -168,7 +196,13 @@ interface Base {
 /** Shown in the Changes tab while a service diagram or linked process is drawn. */
 export const PROCESSES_ONLY_NOTE = 'Comparison covers processes only.';
 
-type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload' | 'compare';
+type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload' | 'compare' | 'trace';
+
+/** One-time flags of a render: switch the webview to a tab. */
+interface Once {
+  showChanges?: true;
+  showTrace?: true;
+}
 
 interface Built {
   loaded: Loaded;
@@ -218,6 +252,11 @@ export class ViewerSession {
   /** The image export the webview is drawing, and where it goes. */
   private expectedExport: (ExpectedExport & { target: string }) | undefined;
   private exportCounter = 0;
+  /** The attached description, when there is one. */
+  private description: AttachedDescription | undefined;
+  /** Increases with every attach or clear; older reads are dropped. */
+  private descriptionGeneration = 0;
+  private descriptionTimer: unknown;
   private readonly timers: Timers;
   private readonly debounceMs: number;
   private readonly now: () => number;
@@ -304,6 +343,74 @@ export class ViewerSession {
     this.disposed = true;
     if (this.refreshTimer !== undefined) this.timers.clearTimeout(this.refreshTimer);
     this.refreshTimer = undefined;
+    if (this.descriptionTimer !== undefined) this.timers.clearTimeout(this.descriptionTimer);
+    this.descriptionTimer = undefined;
+  }
+
+  /** Path of the attached description, when there is one. */
+  get descriptionPath(): string | undefined {
+    return this.description?.path;
+  }
+
+  /**
+   * Attaches the description at `filePath` (undefined clears it) and redraws
+   * with its check. `byUser` when the user picked or cleared it: the render
+   * then shows the Trace tab (for a pick), and the host remembers the choice.
+   * A description that cannot be read stays attached with its error, so a
+   * fix on disk is picked up by descriptionChanged().
+   */
+  async setDescription(filePath: string | undefined, byUser = false): Promise<void> {
+    if (this.disposed) return;
+    const generation = ++this.descriptionGeneration;
+    if (this.descriptionTimer !== undefined) this.timers.clearTimeout(this.descriptionTimer);
+    this.descriptionTimer = undefined;
+    const next = filePath === undefined ? undefined : await this.readDescription(filePath);
+    if (generation !== this.descriptionGeneration || this.disposed) return;
+    const changed = this.description !== undefined || next !== undefined;
+    this.description = next;
+    this.deps.descriptions?.attached(filePath, byUser);
+    if (!changed) return this.idle;
+    // Also before the first render: this one takes its place, with the same read of the file.
+    this.pending = this.run('trace', undefined, byUser && next ? { showTrace: true } : {});
+    await this.pending;
+  }
+
+  /** Stops checking against the description. */
+  clearDescription(): Promise<void> {
+    if (!this.description) return this.idle;
+    return this.setDescription(undefined, true);
+  }
+
+  /** The attached description changed on disk (or was created or deleted): read it again after a quiet period. */
+  descriptionChanged(): void {
+    if (this.disposed || !this.description) return;
+    if (this.descriptionTimer !== undefined) this.timers.clearTimeout(this.descriptionTimer);
+    const filePath = this.description.path;
+    this.descriptionTimer = this.timers.setTimeout(() => {
+      this.descriptionTimer = undefined;
+      if (this.description?.path === filePath) void this.setDescription(filePath);
+    }, this.debounceMs);
+  }
+
+  private async readDescription(filePath: string): Promise<AttachedDescription> {
+    const fileName = path.basename(filePath);
+    const host = this.deps.descriptions;
+    if (!host) return { path: filePath, fileName, error: 'Descriptions cannot be read here.' };
+    try {
+      return { path: filePath, fileName, parsed: parseDescription(await host.read(filePath)) };
+    } catch (err) {
+      return { path: filePath, fileName, error: `Cannot read ${fileName}: ${errorText(err)}` };
+    }
+  }
+
+  /** The check of the chosen process against the attached description. */
+  private traceView(pkg: ProcessPackage, root: Process): TraceView | undefined {
+    const d = this.description;
+    if (!d) return undefined;
+    const empty = { matched: 0, near: 0, missing: 0, unchecked: 0, extra: 0, described: 0 };
+    if (!d.parsed) return { fileName: d.fileName, summary: '', counts: empty, rows: [], notChecked: [], error: d.error ?? 'The description could not be read.' };
+    const result = checkTrace(d.parsed, pkg, root);
+    return { fileName: d.fileName, summary: traceSummary(result.counts), counts: result.counts, rows: result.rows, notChecked: result.notChecked };
   }
 
   /** Handles one raw message from the webview. Unknown messages are ignored. */
@@ -333,6 +440,8 @@ export class ViewerSession {
       await this.requestCompare();
     } else if (msg.type === 'clearComparison') {
       await this.clearComparison();
+    } else if (msg.type === 'clearDescription') {
+      await this.clearDescription();
     } else {
       const expected = this.expectedExport!;
       this.expectedExport = undefined;
@@ -365,7 +474,7 @@ export class ViewerSession {
     }
     if (this.disposed) return true;
     this.fileBase = { kind: 'file', loaded: { pkg, loadedAt: this.now() }, label };
-    this.pending = this.run('compare', undefined, true);
+    this.pending = this.run('compare', undefined, { showChanges: true });
     await this.pending;
     return true;
   }
@@ -449,12 +558,12 @@ export class ViewerSession {
     }
   }
 
-  /** @param showChanges the user just picked a file to compare with: have the webview show the Changes tab. */
-  private async run(mode: RunMode, open?: OpenCalleeMessage, showChanges = false): Promise<void> {
+  /** @param once one-time tab switches: the user just picked a file to compare with, or a description. */
+  private async run(mode: RunMode, open?: OpenCalleeMessage, once: Once = {}): Promise<void> {
     const generation = ++this.generation;
     if (mode === 'reload') this.loaded = undefined;
     // A toggle, a settings change, a new base, a process switch or a navigation while the file is broken redraws the last good package.
-    const redraw = mode === 'options' || mode === 'settings' || mode === 'compare';
+    const redraw = mode === 'options' || mode === 'settings' || mode === 'compare' || mode === 'trace';
     const fromGood = (redraw || mode === 'select' || mode === 'navigate') && this.failure !== undefined && this.good !== undefined;
 
     let result: Built | ErrorMessage;
@@ -489,7 +598,8 @@ export class ViewerSession {
       // A package that differs from the shown one: the shown one becomes the previous version.
       const previous = this.good && this.good.loaded !== loaded && this.differs(this.good.loaded, loaded, plan.root) ? this.good.loaded : this.previous;
       const diff = this.diffView(loaded, plan.root, plan.levels.slice(1).map((l) => l.value.process), previous);
-      const render: RenderMessage = diff ? { ...built, diff } : built;
+      const trace = this.traceView(loaded.pkg, plan.root);
+      const render: RenderMessage = { ...built, ...(diff ? { diff } : {}), ...(trace ? { trace } : {}) };
       result = { loaded, render, below, previous };
     } catch (err) {
       result = buildErrorMessage(this.deps.fileName, err);
@@ -502,8 +612,8 @@ export class ViewerSession {
       this.good = result;
       this.below = result.below;
       if (!fromGood) this.failure = undefined;
-      // showChanges is for this render only: the kept render (re-sent to a reloaded webview) has none.
-      this.post(showChanges ? { ...result.render, showChanges: true } : result.render);
+      // The tab switches are for this render only: the kept render (re-sent to a reloaded webview) has none.
+      this.post({ ...result.render, ...once });
       if (this.failure) this.post(this.banner(this.failure));
     } else {
       this.failure = result;

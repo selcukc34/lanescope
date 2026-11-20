@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Description traceability:** a new **Trace** tab checks the shown process against the Markdown description it was built from (for example Bob's `<name>-description.md`) and lists, row by row, what is matched (✓), a near match (≈, e.g. "matched as 'Validate Order SF'"), missing (✗), not checked (?) and extra in the process (+). Steps, gateway paths, business object fields and human task fields are compared by name, from the description's headings and lists; the logic of the process is not checked. No AI, no network.
+  - A description next to the opened file (`<name>-description.md` or `<name>.md`) is attached automatically; the setting `lanescope.trace.autoDetectDescription` (default `true`) turns this off.
+  - **Lanescope: Check Against Description…** picks a description and opens the tab; **Lanescope: Clear Description Check** or **Clear** in the tab removes it. The choice is remembered per file; the description is watched and the check runs again when it or the process changes.
+  - A row selects its node or flow (opening the sub-process it is in) and shows its details. The diagram is not marked; the comparison, the warnings and the exports are not affected.
+
 ### Fixed
 
 - **DOCTYPE rejections are explained.** A document with a DOCTYPE is still never parsed, but the reason is no longer lost:

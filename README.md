@@ -156,11 +156,48 @@ How elements are paired: by id first (Bob keeps its ids when it generates a proc
 - Sub-processes are part of their process. The lanes of a sub-process's own diagram pair like the process lanes (by id, else by name) within each pair of sub-processes. A collapsed sub-process with added, changed or removed elements inside it (its lanes included) is marked changed, and its row says **Inner changes: N**. Inside an opened sub-process the Changes tab lists the comparison of the process, and the elements drawn there are marked. A row of an element that is not drawn at the shown level selects the sub-process that holds it.
 - Exports never hold the change marks.
 
+## Description traceability
+
+Bob builds a process from a description in Markdown, for example `order-delivery-process-description.md`. The **Trace** tab checks the shown process against such a description and answers two questions with a checklist: is everything the description names drawn, and is anything drawn that the description does not name?
+
+It matches **names only**, deterministically: no AI, no network. It does not check the logic of the process (conditions such as `amount > 10000`, routing rules, validation rules).
+
+What it reads from the description: headings and lists. The kind of a section comes from a keyword in its heading (English, any case):
+
+| Heading keyword | Read as | Compared with |
+| --- | --- | --- |
+| `steps`, `activities` | a list of steps | activities, gateways and events of the process (also inside its sub-processes) |
+| `gateway`, `paths`, `routes` | a list of paths; "after &lt;step&gt;" in a line or a sub-heading says which gateway | the names of the outgoing flows of the first gateway after that step, else string literals in their conditions; without "after", any gateway |
+| `business object`, `data`, `entity` | a `Name:` line or a `###` sub-heading, then a list of fields | the fields of the XSD (Bob) or TWX business object of that name |
+| `human task`, `user task` | a `###` sub-heading per task, then a list of fields | the bindings of the coach controls of the human service the task calls (TWX); Bob output has none, so these rows show as not checked |
+
+Other sections are listed as not checked and give no row. The text of a list item up to `:`, ` (` or ` - ` is its name. Code blocks are skipped. Descriptions larger than 1 MB are not read.
+
+Each row shows:
+
+- **✓ matched**: the same name.
+- **≈ near**: the same name after normalising (case, spaces, `_` and `-`, technical suffixes such as ` SF`, ` Service`, ` Task`), or the same words in another order ("Submit Order" and the start event "Order Submitted"). The row says what it matched, e.g. "matched as 'Validate Order SF'".
+- **✗ missing**: nothing in the process has the name.
+- **? not checked**: the process holds nothing to compare with.
+- **+ extra**: an activity or gateway (top level), an outgoing flow of a checked gateway or a field of a checked business object that the description does not name. Start, end and other events are never extra.
+
+Each node of the process stands for one step at most. Click a row to select its node or flow (opening the sub-process it is in) and show its details; a field row opens the business object in the Data tab. The diagram is not marked. The check covers the process chosen in the toolbar, whatever level is drawn.
+
+How a description is attached:
+
+- **Found next to the file.** When `<name>-description.md` or `<name>.md` sits next to the opened `.bpmn`, `.zip` or `.twx` (same name without the extension), it is attached when the viewer opens; the Trace tab appears but is not opened. Turn this off with `lanescope.trace.autoDetectDescription`.
+- **Picked.** **Lanescope: Check Against Description…** in the Command Palette or the editor's **…** menu asks for a `.md` file and opens the Trace tab.
+- The choice is remembered per file in the workspace. **Clear** in the Trace tab or **Lanescope: Clear Description Check** removes it (and stops a found description from being attached again for that file).
+- The description is watched: the check runs again when it or the process changes on disk. It is only read, never written.
+
+The comparison, the warnings and the exports are not affected by the check.
+
 ## Settings
 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too. Open viewers update when the setting changes. |
+| `lanescope.trace.autoDetectDescription` | `true` | Attach `<name>-description.md` or `<name>.md` next to the opened file as the [description](#description-traceability) to check against. Applies to viewers opened after the change. |
 
 ## Privacy
 
@@ -173,6 +210,7 @@ How elements are paired: by id first (Bob keeps its ids when it generates a proc
 - The extension only reads the files you open. It never writes, changes, renames or deletes a `.bpmn`, `.xsd`, `.zip` or `.twx` file, and it never deploys anything.
 - The one file it writes is an [export](#export), to a new file you pick, never to the opened file or an input type.
 - A file picked to [compare with](#comparing-versions) is only read, never watched or written.
+- A [description](#description-traceability) is only read and watched, never written.
 - Archives are read in memory; nothing is extracted to disk.
 - The diagram view runs under a strict Content Security Policy, uses only scripts bundled in the extension, and makes no network requests.
 

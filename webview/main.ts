@@ -18,6 +18,7 @@ import type {
   ViewOptions,
   WebviewMessage,
 } from '../src/views/protocol';
+import type { TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
@@ -169,6 +170,8 @@ const panel = new SidePanel(
   {
     reveal: (id) => revealElement(id),
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
+    revealTrace: (target) => revealTraceTarget(target),
+    clearDescription: () => vscode.postMessage({ type: 'clearDescription' }),
   },
   // A hidden webview is rebuilt when its editor tab is shown again: start on
   // the tab it had (the state is per editor tab), else on Details.
@@ -186,6 +189,8 @@ let current: RenderMessage | undefined;
 let importGeneration = 0;
 /** The view and selection of each level above the shown one, by path key. */
 const levelStates = new Map<string, LevelState>();
+/** A trace row asked for an element on another level: select it once that level is drawn. */
+let pendingReveal: { id: string; path: string[] } | undefined;
 
 function createViewer(): NavigatedViewer {
   const style = getComputedStyle(document.body);
@@ -279,6 +284,12 @@ async function render(msg: RenderMessage): Promise<void> {
     if (kept) viewer.get<Selection>('selection').select(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
+    // A description was just picked: show its check.
+    if (msg.showTrace === true) panel.showTab('trace');
+    // The level a trace row opened: select its element (only for this render).
+    const reveal = pendingReveal;
+    pendingReveal = undefined;
+    if (reveal && pathKey(reveal.path) === pathKey(path)) revealElement(reveal.id);
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -320,6 +331,23 @@ function revealElement(id: string): void {
   canvas().scrollToElement(element, 80);
   panel.select(shownId);
   panel.showTab('details');
+}
+
+/**
+ * A row of the Trace tab was clicked. Its element belongs to the chosen
+ * process, maybe inside sub-processes: draw that level first (from wherever
+ * the view is), then select it as a Changes row does.
+ */
+function revealTraceTarget(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void {
+  if (!current) return;
+  const want = [current.path[0].id, ...target.subProcessLevels];
+  if (pathKey(currentPath()) === pathKey(want)) {
+    revealElement(target.id);
+    return;
+  }
+  pendingReveal = { id: target.id, path: want };
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'openCallee', calleeId: want[want.length - 1], path: want.slice(0, -1) });
 }
 
 function showError(msg: ErrorMessage): void {
