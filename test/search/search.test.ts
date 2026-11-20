@@ -187,18 +187,41 @@ describe('search on the synthetic TWX export', () => {
       ['service', 'Price Order'],
     ]);
     const price = index.objects[findObject(index, 'service', PRICE_SERVICE_ID)!];
-    expect(price).toMatchObject({ label: 'Service flow', openable: true });
-    expect(price.calledBy!.map((c) => [c.name, c.processName, c.levels])).toEqual([['Review Order', 'Synthetic Order', []]]);
+    const bpd = twx.processes[0].id;
+    // Drawn below the activity that calls it; it calls Apply Discount.
+    expect(price).toMatchObject({ label: 'Service flow', openable: true, level: { processId: bpd, below: [PRICE_SERVICE_ID] }, calls: [DISCOUNT_SERVICE_ID] });
+    expect(price.calledBy).toEqual([{ via: 'process', ownerName: 'Synthetic Order', nodeId: 'node_review', name: 'Review Order', level: { processId: bpd, below: [] } }]);
+    expect(index.objects[0]).toMatchObject({ kind: 'process', level: { processId: bpd, below: [] }, calls: [PRICE_SERVICE_ID] });
   });
 
-  it('lists a service no process calls (Apply Discount is called by a service only)', () => {
+  it('counts a step of a service as a caller: Apply Discount is called by Price Order', () => {
     const r = search(index, 'Apply Discount');
     const service = r.objects.find((o) => o.object.kind === 'service' && o.object.id === DISCOUNT_SERVICE_ID)!;
-    expect(service.object.calledBy).toEqual([]);
+    const callStep = Object.values(r.objects.find((o) => o.object.id === PRICE_SERVICE_ID)!.groups).find((g) => g.group.name === 'Call Discount')!;
+    expect(service.object.calledBy).toEqual([
+      {
+        via: 'service',
+        ownerName: 'Price Order',
+        nodeId: (callStep.group.target as { id: string }).id,
+        name: 'Call Discount',
+        // The step is drawn in Price Order, which opens below Review Order.
+        level: { processId: twx.processes[0].id, below: [PRICE_SERVICE_ID] },
+      },
+    ]);
+    // No process calls it: it opens on its own.
+    expect(service.object.level).toEqual({ serviceId: DISCOUNT_SERVICE_ID, below: [] });
     expect(service.groups[0].hits[0]).toMatchObject({ label: 'Name', match: 'Apply Discount' });
     expect(service.groups[0].group.target).toEqual({ type: 'root' });
-    // Its caller, a step of Price Order, names it in its own group.
-    expect(r.objects.find((o) => o.object.id === PRICE_SERVICE_ID)!.groups.map((g) => [g.group.kind, g.group.name])).toContainEqual(['Call activity', 'Call Discount']);
+  });
+
+  it('a service nothing calls has no callers and opens on its own; so do the steps it holds', async () => {
+    const pkg = await syntheticTwxPackage();
+    delete pkg.processes[0].nodes.find((n) => n.name === 'Review Order')!.calledElement;
+    const alone = await buildSearchIndex(pkg, { showScripts: true });
+    const price = alone.objects[findObject(alone, 'service', PRICE_SERVICE_ID)!];
+    expect(price).toMatchObject({ calledBy: [], level: { serviceId: PRICE_SERVICE_ID, below: [] } });
+    // Its step still calls Apply Discount, from where Price Order is drawn now.
+    expect(alone.objects[findObject(alone, 'service', DISCOUNT_SERVICE_ID)!].calledBy!.map((c) => c.level)).toEqual([{ serviceId: PRICE_SERVICE_ID, below: [] }]);
   });
 
   it('lists the inside of a service once, under the service, with every caller; a caller keeps its own hits', async () => {
@@ -236,13 +259,18 @@ describe('search on the synthetic TWX export', () => {
       ['Synthetic Order', true],
       ['Second Order', false],
     ]);
-    // "Shown process" looks at the shown object only.
+    // "Shown process": the shown process (its sub-processes are part of it) and the services it calls, one level.
     const only = search(two, 'Approved', { scope: 'shown', shownObject: shown });
     expect(objectsOf(only)).toEqual(['Process: Synthetic Order']);
     expect(search(two, 'twice', { scope: 'shown', shownObject: shown }).objects).toEqual([]);
-    // The shown object can be a service too.
+    expect(objectsOf(search(two, 'Compute Total', { scope: 'shown', shownObject: shown }))).toEqual(['Service flow: Price Order']);
+    // Apply Discount is two levels down: not taken in.
+    expect(objectsOf(search(two, 'Discount', { scope: 'shown', shownObject: shown }))).toEqual(['Service flow: Price Order']);
+    // The whole file: every service, in index order (by name).
+    expect(objectsOf(search(two, 'Discount', { scope: 'file', shownObject: shown }))).toEqual(['Service flow: Apply Discount', 'Service flow: Price Order']);
+    // The shown object can be a service too: with the services it calls.
     const price = findObject(two, 'service', PRICE_SERVICE_ID)!;
-    expect(objectsOf(search(two, 'Total', { scope: 'shown', shownObject: price }))).toEqual(['Service flow: Price Order']);
+    expect(objectsOf(search(two, 'Discount', { scope: 'shown', shownObject: price }))).toEqual(['Service flow: Price Order', 'Service flow: Apply Discount']);
   });
 
   it('gives a node inside a sub-process its level, and a service called from there the caller level', async () => {
@@ -255,7 +283,9 @@ describe('search on the synthetic TWX export', () => {
     const nodes = pkg.processes[0].nodes;
     nodes.find((n) => n.name === 'Review Order')!.parentId = nodes.find((n) => n.name === 'Check Stock')!.id;
     const moved = await buildSearchIndex(pkg, { showScripts: true });
-    expect(moved.objects[findObject(moved, 'service', PRICE_SERVICE_ID)!].calledBy![0].levels).toEqual([`sub:${CHECK_STOCK_ID}`]);
+    const price = moved.objects[findObject(moved, 'service', PRICE_SERVICE_ID)!];
+    expect(price.calledBy![0].level).toEqual({ processId: pkg.processes[0].id, below: [`sub:${CHECK_STOCK_ID}`] });
+    expect(price.level).toEqual({ processId: pkg.processes[0].id, below: [`sub:${CHECK_STOCK_ID}`, PRICE_SERVICE_ID] });
   });
 
   it('searches scripts only while showScripts is on', async () => {

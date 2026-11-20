@@ -304,7 +304,7 @@ export class SidePanel {
     const { object } = o;
     const callers = object.calledBy;
     const calledBy =
-      callers === undefined ? null : h('span', { class: 'muted search-called-by' }, callers.length > 0 ? ` · called by ${callers.map((c) => c.name).join(', ')}` : ' · not called by a process');
+      callers === undefined ? null : h('span', { class: 'muted search-called-by' }, callers.length > 0 ? ` · called by ${callerNames(callers)}` : ' · not called');
     const details = h(
       'details',
       { class: `search-object search-${object.kind}${o.shown ? ' shown' : ''}`, 'data-key': key },
@@ -359,7 +359,7 @@ export class SidePanel {
   private callerLink(object: SearchObject): HTMLElement | null {
     const callers = object.calledBy ?? [];
     if (callers.length === 0) return null;
-    const title = 'Stay in the process and select the activity that calls this service';
+    const title = 'Select the activity or step that calls this service, where it is drawn';
     if (callers.length === 1) {
       const link = h('button', { class: 'link small search-caller', type: 'button', title }, 'Show caller');
       link.addEventListener('click', () => this.changes.showCaller(callers[0]));
@@ -369,7 +369,8 @@ export class SidePanel {
     const menu = h('ul', { class: 'search-callers', hidden: '' });
     const link = h('button', { class: 'link small search-caller', type: 'button', title, 'aria-expanded': 'false' }, `Show caller (${callers.length}) ▾`);
     for (const c of callers) {
-      const item = h('button', { class: 'link small', type: 'button', title: `${c.name} in ${c.processName}` }, `${c.name} · ${c.processName}`);
+      const owner = ownerLabel(c);
+      const item = h('button', { class: 'link small', type: 'button', title: `${c.name} in ${owner}` }, `${c.name} · ${owner}`);
       item.addEventListener('click', () => {
         menu.hidden = true;
         link.setAttribute('aria-expanded', 'false');
@@ -974,4 +975,15 @@ function goTitle(object: SearchObject): string {
     return 'Open the service as a diagram and select this element';
   }
   return 'Select in the diagram and show its details';
+}
+
+/** "Process: Order" or "Service: Price Order": what holds a caller. */
+function ownerLabel(c: SearchCaller): string {
+  return `${c.via === 'service' ? 'Service' : 'Process'}: ${c.ownerName}`;
+}
+
+/** "Review Order, Service: Price Order": the activities of processes by name, a calling service by its own. */
+function callerNames(callers: SearchCaller[]): string {
+  const names = callers.map((c) => (c.via === 'service' ? `Service: ${c.ownerName}` : c.name));
+  return [...new Set(names)].join(', ');
 }

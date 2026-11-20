@@ -10,22 +10,37 @@ export interface SearchObject {
   name: string;
   /** process: the process id of the package; service: its object id ("1.…"); dataType: its name. */
   id: string;
-  /** Services: the activities of the file's processes that call it. */
+  /** Services: the activities of processes, then the steps of services, that call it. */
   calledBy?: SearchCaller[];
   /** Services: true when it opens as a diagram. */
   openable?: boolean;
+  /** Where the object's diagram is drawn; undefined for a service without a diagram and a business object. */
+  level?: SearchLevel;
+  /** Ids of the services the object calls directly (one level), which the "Shown process" scope takes in. */
+  calls?: string[];
 }
 
-/** An activity of a process that calls a service. */
+/**
+ * A level of the viewer as a showLevel message names it: a process of the
+ * package (picked) or a service on its own, then the levels below it.
+ */
+export interface SearchLevel {
+  processId?: string;
+  serviceId?: string;
+  below: string[];
+}
+
+/** An activity of a process, or a step of a service, that calls a service. */
 export interface SearchCaller {
-  /** Id of the process (in the package) that holds it. */
-  processId: string;
-  processName: string;
-  /** Sub-process levels of the process around the activity, outermost first. */
-  levels: string[];
-  /** Diagram id of the activity. */
+  /** A process's activity or a service's step. */
+  via: 'process' | 'service';
+  /** Name of the process or service that holds it. */
+  ownerName: string;
+  /** Diagram id of the activity or step. */
   nodeId: string;
   name: string;
+  /** Where it is drawn. */
+  level: SearchLevel;
 }
 
 /** What a result selects, inside its object. */
@@ -127,6 +142,7 @@ export interface SearchResult {
 }
 
 export interface SearchOptions {
+  /** "shown": the shown object (a process with its sub-processes, or a service) and the services it calls. */
   scope: SearchScope;
   /** Index into SearchIndex.objects of the object the viewer shows; none when undefined. */
   shownObject?: number;
@@ -172,7 +188,7 @@ export function findObject(index: SearchIndex, kind: SearchObject['kind'], id: s
  * The shown object comes first, the others in index order; inside an object,
  * groups with a hit in their name come first, the rest in diagram order;
  * hits keep the order of the fields. At most MAX_HITS hits are listed.
- * With scope "shown", only the shown object is searched.
+ * With scope "shown", only the shown object and the services it calls are searched.
  */
 export function search(index: SearchIndex, rawQuery: string, options: SearchOptions = { scope: 'file' }): SearchResult {
   const query = rawQuery.trim().slice(0, MAX_QUERY_LENGTH);
@@ -190,7 +206,13 @@ export function search(index: SearchIndex, rawQuery: string, options: SearchOpti
   };
   if (result.tooShort) return result;
   const needle = foldCase(query);
-  const inScope = (object: number) => options.scope === 'file' || object === options.shownObject;
+  const shown = options.shownObject !== undefined ? index.objects[options.shownObject] : undefined;
+  const callees = new Set(shown?.calls ?? []);
+  const inScope = (object: number) => {
+    if (options.scope === 'file' || object === options.shownObject) return true;
+    const o = index.objects[object];
+    return o.kind === 'service' && callees.has(o.id);
+  };
 
   const hitsByGroup = new Map<number, { hits: SearchHit[]; nameHit: boolean }>();
   for (const field of index.fields) {

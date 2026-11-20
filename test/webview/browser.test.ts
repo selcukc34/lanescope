@@ -1117,9 +1117,10 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     });
 
     it('opens a service no process calls as a root level of its own, with the file in the breadcrumb', async () => {
-      await openHosted(() => syntheticTwxPackage(), { fileName: 'synthetic.twx' });
+      const top = await openHosted(() => syntheticTwxPackage(), { fileName: 'synthetic.twx' });
       await typeSearch('Apply Discount');
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.search-called-by')].map((e) => e.textContent)`)).toContain(' · not called by a process');
+      // Called by a step of a service only.
+      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Apply Discount')).querySelector('.search-called-by').textContent`)).toBe(' · called by Service: Price Order');
       await clickResult('.search-head', 'Service flowApply Discount');
       expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', serviceId: DISCOUNT_SERVICE_ID, below: [] }]);
       await pump();
@@ -1133,6 +1134,25 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await pump();
       expect(await page.eval<string[]>(crumbsText)).toEqual([]);
       expect(await page.eval<string>(`document.querySelector('.toolbar .title').textContent`)).toBe('Synthetic Order');
+
+      // "Show caller" on it: the calling service, where it is drawn (below Review Order), on the calling step.
+      await page.eval(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Apply Discount')).querySelector('.search-caller').click()`);
+      expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: top.rootProcessId, below: [PRICE_SERVICE_ID] }]);
+      await pump();
+      expect(await page.eval<{ crumbs: string[]; details: string; selected: number }>(`({ crumbs: ${crumbsText}, details: ${details}, selected: document.querySelectorAll('.djs-element.selected').length })`)).toEqual({
+        crumbs: ['Synthetic Order', 'Price Order'],
+        details: 'Call Discount',
+        selected: 1,
+      });
+    }, 30_000);
+
+    it('says "not called" for a service nothing calls', async () => {
+      const pkg = await syntheticTwxPackage();
+      delete pkg.processes[0].nodes.find((n) => n.name === 'Review Order')!.calledElement;
+      await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
+      await typeSearch('Price Order');
+      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelector('.search-called-by').textContent`)).toBe(' · not called');
+      expect(await page.eval<number>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelectorAll('.search-caller').length`)).toBe(0);
     });
 
     it('filters to the shown process, and remembers the choice', async () => {
@@ -1146,6 +1166,9 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       const ui = await page.eval<SearchUi>(searchUi);
       expect(ui.objects).toEqual([['Process: Synthetic Order', true]]);
       expect(ui.state).toMatchObject({ searchScope: 'shown' });
+      // The services the shown process calls are part of it; Apply Discount, two levels down, is not.
+      await typeSearch('Discount');
+      expect((await page.eval<SearchUi>(searchUi)).objects).toEqual([['Service flow: Price Order', true]]);
       // A rebuilt webview starts with it.
       await openHosted(async () => pkg, { fileName: 'synthetic.twx', query: `?state=${encodeURIComponent(JSON.stringify({ search: 'Approved', searchScope: 'shown', tab: 'search' }))}` });
       expect(await page.eval<string>(`document.querySelector('.search-scope').value`)).toBe('shown');

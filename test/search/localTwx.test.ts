@@ -57,7 +57,7 @@ describe.skipIf(!hasLocalTwx('services'))('search of the whole of services.twx',
 
   it('lists a service with several callers once, naming every caller', () => {
     const service = index.objects.find((o) => o.kind === 'service' && o.name === 'Service flow1')!;
-    expect(service.calledBy!.map((c) => `${c.name} @ ${c.processName}`)).toEqual([
+    expect(service.calledBy!.map((c) => `${c.name} @ ${c.ownerName}`)).toEqual([
       'Service flow1 @ JsSampleProcess',
       'Service flow1 @ MyFirstProcess',
       'Copy of Service flow1 @ MyFirstProcess',
@@ -66,10 +66,42 @@ describe.skipIf(!hasLocalTwx('services'))('search of the whole of services.twx',
     expect(r.objects.filter((o) => o.object.kind === 'service' && o.object.name === 'Service flow1')).toHaveLength(1);
   });
 
+  it('counts steps of services as callers, after the activities of processes', () => {
+    const service = (name: string) => index.objects.find((o) => o.kind === 'service' && o.name === name)!;
+    const getWeather = service('GetWeather');
+    expect(getWeather.calledBy!.map((c) => `${c.via}: ${c.ownerName}`)).toEqual([
+      'service: Demo_ExposedWeather',
+      'service: Demo_OrphanWeather',
+      'service: Demo_WeatherCatchAll',
+      'service: Demo_WeatherErrorEnd',
+      'service: Demo_WeatherSpecific',
+    ]);
+    // No process calls it: it opens on its own; a step that calls it is drawn where its service is.
+    expect(getWeather.level).toEqual({ serviceId: getWeather.id, below: [] });
+    const catchAll = service('Demo_WeatherCatchAll');
+    expect(getWeather.calledBy![2].level).toEqual(catchAll.level);
+    expect(catchAll.level).toMatchObject({ processId: expect.any(String), below: [catchAll.id] });
+    // Both kinds of caller.
+    expect(service('Service flowDB Connection').calledBy!.map((c) => `${c.via}: ${c.ownerName} / ${c.name}`)).toEqual([
+      'process: MyFirstProcess / Service flowDB Connection',
+      'service: Demo_DoubleCall / Service flowDB Connection',
+      'service: Demo_DoubleCall / Service flowDB Connection 1',
+    ]);
+  });
+
+  it('"Shown process" takes in the services the process calls, one level down', () => {
+    expect(objectsOf(shownAs('JsSampleProcess', SCRIPT_WORD, 'shown'))).toEqual(['Service flow: JsLoops']);
+    expect(shownAs('Demo_MainProcess', SCRIPT_WORD, 'shown').objects).toEqual([]);
+    expect(objectsOf(shownAs('Demo_MainProcess', 'customerName', 'shown'))).toContain('Client-side human service: Demo_CustomerForm');
+    // GetWeather is called by the services Demo_MainProcess calls, not by the process itself.
+    expect(objectsOf(shownAs('Demo_MainProcess', 'GetWeather', 'shown'))).not.toContain('Service flow: GetWeather');
+    expect(objectsOf(shownAs('Demo_MainProcess', 'GetWeather', 'file'))).toContain('Service flow: GetWeather');
+  });
+
   it('finds a word of a service script while showScripts is on, in the service, once', async () => {
     const r = shownAs('JsSampleProcess', SCRIPT_WORD);
     expect(objectsOf(r)).toEqual(['Service flow: JsLoops']);
-    expect(r.objects[0].object.calledBy!.map((c) => `${c.name} @ ${c.processName}`)).toEqual(['JsLoops @ JsSampleProcess']);
+    expect(r.objects[0].object.calledBy!.map((c) => `${c.name} @ ${c.ownerName}`)).toEqual(['JsLoops @ JsSampleProcess']);
     expect(groupsOf(r).map((g) => [g.group.kind, g.group.name, g.hits.map((h) => h.label)])).toEqual([
       ['Script task', 'Script task', ['Script']],
       ['Script task', 'Script task 1', ['Script']],

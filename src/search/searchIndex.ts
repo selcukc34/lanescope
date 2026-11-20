@@ -2,7 +2,8 @@
 // model of the whole open file: every process (with the nodes inside its
 // sub-processes), every service of a TWX export, called or not (its diagram,
 // as the viewer draws it when the service is opened), and every business
-// object. It reads nothing new itself: processes come with the package, the
+// object. It also works out where each object is drawn and who calls each
+// service: activities of processes and steps of other services. It reads nothing new itself: processes come with the package, the
 // service diagrams from the package's CalleeDiagramSource (cached there).
 // Packed toolkits are not read. Pure: no vscode.
 //
@@ -10,9 +11,9 @@
 // index only counts what it left out.
 
 import { KIND_LABELS } from '../model/labels';
-import type { CalledElement, CoachSummary, DataMapping, DataParameter, FlowNode, Process, ProcessPackage, ProcessVariable } from '../model/model';
+import type { CalledElement, CoachSummary, DataMapping, DataParameter, FlowNode, Process, ProcessPackage, ProcessVariable, ServiceEntry } from '../model/model';
 import { subProcessLevels } from '../model/subProcess';
-import type { SearchCaller, SearchField, SearchGroup, SearchIndex, SearchObject, SearchTarget } from './search';
+import type { SearchCaller, SearchField, SearchGroup, SearchIndex, SearchLevel, SearchObject, SearchTarget } from './search';
 
 export interface SearchIndexOptions {
   /** lanescope.showScripts: when false, no script text is indexed. */
@@ -55,30 +56,66 @@ class IndexBuilder {
 /** The search index of a whole package: processes, services and business objects. */
 export async function buildSearchIndex(pkg: ProcessPackage, options: SearchIndexOptions): Promise<SearchIndex> {
   const b = new IndexBuilder(options.showScripts);
+  const source = pkg.calleeDiagrams;
+  /** The service ids a diagram calls directly. */
+  const callsOf = (p: Process) => {
+    if (!source) return [];
+    const ids = p.nodes.flatMap((n) => (n.calledElement ? [source.key(n.calledElement.id)] : [])).filter((id) => id.startsWith('1.'));
+    return [...new Set(ids)];
+  };
+
   for (const process of pkg.processes) {
-    const o = b.object({ kind: 'process', label: 'Process', name: process.name || process.id, id: process.id });
+    const o = b.object({ kind: 'process', label: 'Process', name: process.name || process.id, id: process.id, level: { processId: process.id, below: [] }, calls: callsOf(process) });
     indexProcess(b, o, process, 'Process');
   }
 
-  const services = pkg.calleeDiagrams;
-  if (services) {
-    const callers = callersByService(pkg);
-    for (const s of services.list()) {
-      const openable = services.openability(s.id).openable;
-      const diagram = openable ? await services.read(s.id) : undefined;
+  if (source) {
+    // First every diagram, so that every caller (activities of processes, steps of services) is known.
+    const services: Array<{ entry: ServiceEntry; diagram?: Process }> = [];
+    for (const entry of source.list()) {
+      const diagram = source.openability(entry.id).openable ? (await source.read(entry.id))?.process : undefined;
+      services.push({ entry, ...(diagram ? { diagram } : {}) });
+    }
+    const processCallers = new Map<string, SearchCaller[]>();
+    for (const p of pkg.processes) {
+      for (const n of p.nodes) {
+        const id = n.calledElement ? source.key(n.calledElement.id) : '';
+        if (!id.startsWith('1.')) continue;
+        const caller: SearchCaller = { via: 'process', ownerName: p.name || p.id, nodeId: n.id, name: n.name || n.id, level: { processId: p.id, below: subProcessLevels(p, n) } };
+        processCallers.set(id, [...(processCallers.get(id) ?? []), caller]);
+      }
+    }
+    // A service opens below the first activity of a process that calls it, else on its own.
+    const levelOf = (id: string): SearchLevel => {
+      const c = processCallers.get(id)?.[0];
+      return c ? { processId: c.level.processId, below: [...c.level.below, id] } : { serviceId: id, below: [] };
+    };
+    const serviceCallers = new Map<string, SearchCaller[]>();
+    for (const { entry, diagram } of services) {
+      if (!diagram) continue;
+      const owner = levelOf(entry.id);
+      for (const n of diagram.nodes) {
+        const id = n.calledElement ? source.key(n.calledElement.id) : '';
+        if (!id.startsWith('1.') || id === entry.id) continue;
+        const caller: SearchCaller = { via: 'service', ownerName: entry.name, nodeId: n.id, name: n.name || n.id, level: { ...owner, below: [...owner.below, ...subProcessLevels(diagram, n)] } };
+        serviceCallers.set(id, [...(serviceCallers.get(id) ?? []), caller]);
+      }
+    }
+    for (const { entry, diagram } of services) {
       const o = b.object({
         kind: 'service',
-        label: s.kind,
-        name: s.name,
-        id: s.id,
-        calledBy: callers.get(s.id) ?? [],
+        label: entry.kind,
+        name: entry.name,
+        id: entry.id,
+        calledBy: [...(processCallers.get(entry.id) ?? []), ...(serviceCallers.get(entry.id) ?? [])],
         openable: diagram !== undefined,
+        ...(diagram ? { level: levelOf(entry.id), calls: callsOf(diagram) } : {}),
       });
       if (diagram) {
-        indexProcess(b, o, diagram.process, s.kind);
+        indexProcess(b, o, diagram, entry.kind);
       } else {
-        const g = b.group(o, { type: 'root' }, s.kind, s.name, []);
-        b.add(g, 'Name', s.name, { isName: true });
+        const g = b.group(o, { type: 'root' }, entry.kind, entry.name, []);
+        b.add(g, 'Name', entry.name, { isName: true });
       }
     }
   }
@@ -97,24 +134,6 @@ export async function buildSearchIndex(pkg: ProcessPackage, options: SearchIndex
     scriptsOmitted: b.scriptsOmitted,
     toolkitsNotSearched: (pkg.source.twx?.packedToolkits ?? 0) > 0,
   };
-}
-
-/** For every service: the activities of the package's processes that call it. */
-function callersByService(pkg: ProcessPackage): Map<string, SearchCaller[]> {
-  const out = new Map<string, SearchCaller[]>();
-  const source = pkg.calleeDiagrams;
-  if (!source) return out;
-  for (const p of pkg.processes) {
-    for (const n of p.nodes) {
-      if (!n.calledElement) continue;
-      const id = source.key(n.calledElement.id);
-      if (!id.startsWith('1.')) continue;
-      const list = out.get(id) ?? [];
-      list.push({ processId: p.id, processName: p.name || p.id, levels: subProcessLevels(p, n), nodeId: n.id, name: n.name || n.id });
-      out.set(id, list);
-    }
-  }
-  return out;
 }
 
 /** The nodes, flows and data of one diagram (a process or a service), as groups of object `o`. */

@@ -21,7 +21,7 @@ import type {
   WebviewMessage,
 } from '../src/views/protocol';
 import type { TraceTarget } from '../src/trace/trace';
-import type { SearchCaller, SearchObject, SearchResult, SearchScope, SearchTarget } from '../src/search/search';
+import type { SearchCaller, SearchLevel, SearchObject, SearchResult, SearchScope, SearchTarget } from '../src/search/search';
 import { clear, h } from './dom';
 import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
@@ -534,9 +534,10 @@ function goTo(where: ShowLevelMessage, id: string | undefined, fromSearch: boole
 /**
  * A row of the Search tab was clicked: go where the match is. In a process
  * of the file: that process (picked), the sub-process level around the
- * element, the element. In a service: its diagram opened from the first
- * activity that calls it, or on its own when nothing calls it; a service
- * without a diagram selects its caller. A business object: the Data tab.
+ * element, the element. In a service: its diagram where the index says it
+ * is drawn (below the first activity of a process that calls it, else on
+ * its own); a service without a diagram selects its caller. A business
+ * object: the Data tab.
  */
 function revealSearchResult(object: SearchObject, target: SearchTarget, dataField?: string): void {
   if (!current) return;
@@ -544,26 +545,25 @@ function revealSearchResult(object: SearchObject, target: SearchTarget, dataFiel
     panel.showType(target.name, dataField);
     return;
   }
-  const levels = target.type === 'root' ? [] : target.levels;
-  const id = target.type === 'root' ? undefined : target.id;
-  if (object.kind === 'process') {
-    goTo({ type: 'showLevel', processId: object.id, below: levels }, id, true);
-    return;
-  }
-  const caller = object.calledBy?.[0];
-  if (!object.openable) {
+  const level = object.level;
+  if (!level) {
+    const caller = object.calledBy?.[0];
     if (caller) showCaller(caller);
     return;
   }
-  const where: ShowLevelMessage = caller
-    ? { type: 'showLevel', processId: caller.processId, below: [...caller.levels, object.id, ...levels] }
-    : { type: 'showLevel', serviceId: object.id, below: levels };
-  goTo(where, id, true);
+  const levels = target.type === 'root' ? [] : target.levels;
+  goTo(showLevel(level, levels), target.type === 'root' ? undefined : target.id, true);
 }
 
-/** "Show caller": the activity that calls a service, in its process. */
+/** "Show caller": the activity of a process, or the step of a service, that calls a service. */
 function showCaller(caller: SearchCaller): void {
-  goTo({ type: 'showLevel', processId: caller.processId, below: caller.levels }, caller.nodeId, true);
+  goTo(showLevel(caller.level), caller.nodeId, true);
+}
+
+/** The showLevel message of a level, with `more` levels below it. */
+function showLevel(level: SearchLevel, more: string[] = []): ShowLevelMessage {
+  const below = [...level.below, ...more];
+  return level.serviceId !== undefined ? { type: 'showLevel', serviceId: level.serviceId, below } : { type: 'showLevel', processId: level.processId!, below };
 }
 
 // ---- Search -------------------------------------------------------------
