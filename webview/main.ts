@@ -19,6 +19,7 @@ import type {
   WebviewMessage,
 } from '../src/views/protocol';
 import { clear, h } from './dom';
+import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
 import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
 import { isTabId, SidePanel, type TabId } from './panel';
@@ -192,12 +193,15 @@ function createViewer(): NavigatedViewer {
   const v = new NavigatedViewer({
     container: canvasHost,
     keyboard: { bind: false },
+    // bpmn-js's drill-down would switch to an empty plane of the sub-process; ours opens its level (./drilldown).
+    additionalModules: [NO_BPMN_DRILLDOWN],
     bpmnRenderer: {
       defaultFillColor: color('--vscode-editor-background', '#ffffff'),
       defaultStrokeColor: color('--vscode-editor-foreground', '#000000'),
       defaultLabelColor: color('--vscode-editor-foreground', '#000000'),
     },
   });
+  keepImportedRoot(v);
   const eventBus = v.get<EventBus>('eventBus');
   eventBus.on('element.click', (e) => {
     const el = e.element;
@@ -265,6 +269,8 @@ async function render(msg: RenderMessage): Promise<void> {
       canvas().zoom('fit-viewport');
     }
     markChanges(msg);
+    // The arrow on a sub-process opens its level, like a double-click.
+    addDrilldownArrows(viewer, msg.elements, openCallee);
     // On the same level the selected element is kept while its id exists; another level starts
     // with the selection it had when it was left, or none.
     panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });

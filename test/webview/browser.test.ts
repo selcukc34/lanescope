@@ -96,6 +96,17 @@ class Page {
     }
   }
 
+  /** A real mouse click in the middle of the first element matching `selector`. */
+  async clickSelector(selector: string): Promise<void> {
+    const at = await this.eval<{ x: number; y: number } | null>(
+      `(() => { const b = document.querySelector(${JSON.stringify(selector)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+    );
+    if (!at) throw new Error(`Nothing matches ${selector}`);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+    }
+  }
+
   async pressEnter(): Promise<void> {
     for (const type of ['keyDown', 'keyUp']) {
       await this.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) });
@@ -109,6 +120,34 @@ class Page {
     await this.eval(`(async () => { ${before}; window.postMessage(${JSON.stringify(render)}, '*'); })()`);
     await this.eval(`new Promise((r) => { const t = () => (document.querySelector('.djs-element') && document.querySelector('.overlay').hidden ? r(true) : setTimeout(t, 20)); t(); })`);
   }
+}
+
+/** A Bob process with a sub-process that opens (Prepare) and an empty one. */
+const SUB_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="defs" targetNamespace="http://example.com/sub">
+  <bpmn:process id="order" name="Order">
+    <bpmn:startEvent id="start" name="Start"/>
+    <bpmn:subProcess id="prepare" name="Prepare">
+      <bpmn:startEvent id="prepStart" name="Prepare Start"/>
+      <bpmn:task id="pick" name="Pick Items"/>
+      <bpmn:endEvent id="prepEnd" name="Prepare End"/>
+      <bpmn:sequenceFlow id="sf1" sourceRef="prepStart" targetRef="pick"/>
+      <bpmn:sequenceFlow id="sf2" sourceRef="pick" targetRef="prepEnd"/>
+    </bpmn:subProcess>
+    <bpmn:subProcess id="empty" name="Empty"/>
+    <bpmn:endEvent id="end" name="End"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="prepare"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="prepare" targetRef="empty"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="empty" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** The first render of a package, as the host posts it. */
+async function plainRender(pkg: ProcessPackage): Promise<RenderMessage> {
+  const renders: RenderMessage[] = [];
+  const s = new ViewerSession({ fileName: 'order.bpmn', load: async () => pkg, post: (m) => void (m.type === 'render' && renders.push(m)) });
+  await s.handleMessage({ type: 'ready' });
+  return renders[renders.length - 1];
 }
 
 async function renderOf(open: ProcessPackage, base: ProcessPackage): Promise<{ withShow: RenderMessage; again: RenderMessage }> {
@@ -138,6 +177,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   let renderAgain: RenderMessage;
   /** A TWX process compared with a version where a task inside the sub-process "Check Stock" has another name. */
   let subRender: RenderMessage;
+  /** SUB_BPMN: a sub-process that opens and an empty one. */
+  let drillRender: RenderMessage;
 
   beforeAll(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'lanescope-browser-'));
@@ -168,6 +209,9 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     ({ withShow: render, again: renderAgain } = await renderOf(v2, v1));
     const renamed = await syntheticTwxPackage({ subProcess: true });
     renamed.processes[0].nodes.find((n) => n.name === 'Count Items')!.name = 'Count All Items';
+    drillRender = await plainRender(
+      await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }),
+    );
     ({ withShow: subRender } = await renderOf(renamed, await syntheticTwxPackage({ subProcess: true })));
 
     const profile = path.join(dir, 'profile');
@@ -271,6 +315,43 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       errors: window.__errors,
     })`);
     expect(after).toEqual({ selected: [checkId], details: 'Check Stock', errors: [] });
+  });
+
+  it('puts our drill-down arrow on a sub-process that opens; a click opens its level and the canvas stays', async () => {
+    expect(drillRender.elements.prepare).toMatchObject({ openCallee: 'sub:prepare' });
+    expect(drillRender.elements.empty).toMatchObject({ openUnavailable: 'Empty sub-process' });
+    await page.open(url, drillRender);
+    // Selected, the empty sub-process would show bpmn-js's arrow (bjs-drilldown-empty).
+    await page.eval(`document.querySelector('[data-element-id="empty"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+    const shown = `({
+      arrows: [...document.querySelectorAll('.bjs-drilldown')].map((b) => [b.closest('.djs-overlays').getAttribute('data-container-id'), b.classList.contains('ls-drilldown'), b.title]),
+      breadcrumbs: document.querySelectorAll('.bjs-breadcrumbs').length,
+      drawn: [...document.querySelectorAll('.djs-element')].filter((e) => e.getBoundingClientRect().width > 0).length,
+      start: document.querySelector('[data-element-id="start"]').getBoundingClientRect().width > 0,
+      errors: window.__errors,
+    })`;
+    const before = await page.eval<{ arrows: unknown[]; breadcrumbs: number; drawn: number; start: boolean; errors: string[] }>(shown);
+    expect(before.arrows).toEqual([['prepare', true, 'Open Prepare']]);
+    expect(before.breadcrumbs).toBe(0);
+    expect(before.start).toBe(true);
+
+    await page.eval('window.__posted.length = 0');
+    await page.clickSelector('.ls-drilldown');
+    expect(await page.eval<unknown[]>('window.__posted')).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
+    // Still the process: no plane of bpmn-js, no breadcrumb of its own.
+    const after = await page.eval<typeof before>(shown);
+    expect(after).toEqual({ ...before, errors: [] });
+  });
+
+  it('keeps the drill-down arrows out of an exported image', async () => {
+    await page.open(url, drillRender);
+    const xml = drillRender.xml;
+    await page.eval(`window.postMessage(${JSON.stringify({ type: 'exportSource', requestId: 'export-1', format: 'svg', xml })}, '*')`);
+    await page.eval(`new Promise((r) => { const t = () => (window.__posted.some((m) => m.type === 'exportData') ? r(true) : setTimeout(t, 20)); t(); })`);
+    const svg = await page.eval<string>(`(() => { const m = window.__posted.find((m) => m.type === 'exportData'); return typeof m.data === 'string' ? m.data : JSON.stringify(m); })()`);
+    expect(svg).toContain('<svg');
+    expect(svg).not.toMatch(/drilldown|<button/);
+    expect(await page.eval<number>(`document.querySelectorAll('.bjs-breadcrumbs').length`)).toBe(0);
   });
 
   it('opens the saved tab when the webview is rebuilt (its editor tab was shown again)', async () => {
