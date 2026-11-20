@@ -5,6 +5,7 @@ import type { DiffEntry } from '../src/diff/diff';
 import type { CalleeStepKind } from '../src/model/model';
 import type { CalleeDetails, CalleeStepDetails, DiffView, TraceView } from '../src/views/protocol';
 import type { TraceRow, TraceStatus } from '../src/trace/trace';
+import type { SearchResult } from '../src/search/search';
 
 /**
  * A type is a link only when the Data tab has a row for it. System Data
@@ -181,4 +182,9 @@ export function traceTabTitle(trace: Pick<TraceView, 'counts' | 'error'> | undef
 export function notCheckedText(headings: readonly string[]): string {
   if (headings.length === 0) return '';
   return `${headings.length} ${headings.length === 1 ? 'section' : 'sections'} not checked: ${headings.join(', ')}`;
+}
+
+/** "Search (3)": the groups with a hit; just "Search" while the query is too short. */
+export function searchTabTitle(result: Pick<SearchResult, 'tooShort' | 'groups'>): string {
+  return result.tooShort ? 'Search' : `Search (${result.groups.length})`;
 }

@@ -20,6 +20,7 @@ import type {
   WebviewMessage,
 } from '../src/views/protocol';
 import type { TraceTarget } from '../src/trace/trace';
+import { search, type SearchOpen, type SearchTarget } from '../src/search/search';
 import { clear, h } from './dom';
 import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
@@ -37,6 +38,8 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 interface PersistedState {
   tab?: TabId;
+  /** The text in the search box (the state is per editor tab, so per document). */
+  search?: string;
 }
 
 interface Viewbox {
@@ -51,6 +54,13 @@ interface DiagramElement {
   type: string;
   /** Set on an external label: the element it belongs to. */
   labelTarget?: DiagramElement;
+  /** Shapes: their bounds. */
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  /** Connections: their points. */
+  waypoints?: Array<{ x: number; y: number }>;
 }
 
 interface Canvas {
@@ -157,6 +167,18 @@ traceButton.addEventListener('click', () => {
   else vscode.postMessage({ type: 'checkDescription' });
 });
 
+// Search: always there; Cmd/Ctrl+F focuses it, Escape clears it. Results are listed in the Search tab.
+const SEARCH_DEBOUNCE_MS = 200;
+const searchInput = h('input', {
+  type: 'search',
+  class: 'search-input',
+  placeholder: 'Search…',
+  title: 'Search names, documentation, scripts, conditions… (Cmd/Ctrl+F)',
+  'aria-label': 'Search names, documentation, scripts, conditions…',
+  spellcheck: 'false',
+});
+searchInput.value = typeof state.search === 'string' ? state.search : '';
+
 const toolbar = h(
   'div',
   { class: 'toolbar', role: 'toolbar' },
@@ -170,6 +192,7 @@ const toolbar = h(
   h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
   compareButton,
   traceGroup,
+  searchInput,
   exportGroup,
 );
 
@@ -213,10 +236,12 @@ const panel = new SidePanel(
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
     revealTrace: (target) => revealTraceTarget(target),
     clearDescription: () => vscode.postMessage({ type: 'clearDescription' }),
+    revealSearch: (target, open) => revealSearchTarget(target, open),
+    focusSearchBox: () => searchInput.focus(),
   },
   // A hidden webview is rebuilt when its editor tab is shown again: start on
   // the tab it had (the state is per editor tab), else on Details.
-  isTabId(state.tab) ? state.tab : 'details',
+  isTabId(state.tab) && (state.tab !== 'search' || searchInput.value.trim() !== '') ? state.tab : 'details',
 );
 
 const root = document.getElementById('root')!;
@@ -233,8 +258,18 @@ let current: RenderMessage | undefined;
 let importGeneration = 0;
 /** The view and selection of each level above the shown one, by path key. */
 const levelStates = new Map<string, LevelState>();
-/** A trace row asked for an element on another level: select it once that level is drawn. */
-let pendingReveal: { id: string; path: string[] } | undefined;
+/** A trace or search row asked for an element on another level: select it once that level is drawn. */
+let pendingReveal: PendingReveal | undefined;
+
+interface PendingReveal {
+  /** Element to select; undefined selects nothing (the process). */
+  id: string | undefined;
+  path: string[];
+  /** A step of a service diagram: `id` is the source's id, maybe the drawn element's originalId. */
+  byOriginalId?: boolean;
+  /** A search row: centre the element and stay on the Search tab. */
+  fromSearch?: boolean;
+}
 
 function createViewer(): NavigatedViewer {
   const style = getComputedStyle(document.body);
@@ -340,10 +375,12 @@ async function render(msg: RenderMessage): Promise<void> {
     if (msg.showChanges === true) panel.showTab('changes');
     // A description was just picked: show its check.
     if (msg.showTrace === true) panel.showTab('trace');
-    // The level a trace row opened: select its element (only for this render).
+    // The search runs again on what is drawn now (a reload, a toggle, another level).
+    runSearch(false);
+    // The level a trace or search row opened: select its element (only for this render).
     const reveal = pendingReveal;
     pendingReveal = undefined;
-    if (reveal && pathKey(reveal.path) === pathKey(path)) revealElement(reveal.id);
+    if (reveal && pathKey(reveal.path) === pathKey(path)) finishReveal(reveal);
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -384,7 +421,7 @@ function markChanges(msg: RenderMessage): void {
  * A row of the Changes tab was clicked: select the element (as a click on it
  * does), scroll it into view at the current zoom, and show its details.
  */
-function revealElement(id: string): void {
+function revealElement(id: string, fromSearch = false): void {
   if (!current) return;
   const registry = viewer.get<ElementRegistry>('elementRegistry');
   // Not drawn at this level (inside a collapsed sub-process): the sub-process that holds it.
@@ -392,11 +429,155 @@ function revealElement(id: string): void {
   if (shownId === undefined) return;
   const element = registry.get(shownId)!;
   viewer.get<Selection>('selection').select(element);
+  panel.select(shownId);
+  if (fromSearch) {
+    // A search result is centred, at the current zoom; the results stay on screen.
+    centerOn(element);
+    return;
+  }
   // Scrolls only when the element is (partly) out of view; the zoom stays.
   canvas().scrollToElement(element, 80);
-  panel.select(shownId);
   panel.showTab('details');
 }
+
+/** Moves the view so that the element is in the middle, keeping the zoom. */
+function centerOn(element: DiagramElement): void {
+  const c = canvas();
+  const box = c.viewbox();
+  let center: { x: number; y: number } | undefined;
+  if (element.waypoints && element.waypoints.length > 0) {
+    const xs = element.waypoints.map((p) => p.x);
+    const ys = element.waypoints.map((p) => p.y);
+    center = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  } else if (element.x !== undefined && element.y !== undefined) {
+    center = { x: element.x + (element.width ?? 0) / 2, y: element.y + (element.height ?? 0) / 2 };
+  }
+  if (!center) return;
+  c.viewbox({ x: center.x - box.width / 2, y: center.y - box.height / 2, width: box.width, height: box.height });
+}
+
+/** Selects what a pending reveal asked for, once its level is drawn. */
+function finishReveal(reveal: PendingReveal): void {
+  if (!current) return;
+  if (reveal.id === undefined) {
+    viewer.get<Selection>('selection').select(null);
+    panel.select(undefined);
+    return;
+  }
+  const want = reveal.id;
+  const id = reveal.byOriginalId
+    ? Object.values(current.elements).find((e) => e.id === want || e.originalId === want)?.id
+    : want;
+  if (id !== undefined) revealElement(id, reveal.fromSearch === true);
+}
+
+/**
+ * A row of the Search tab was clicked. Its element belongs to the chosen
+ * process (maybe inside sub-processes); with `open`, a step of the service
+ * an activity calls. Draws that level first, from wherever the view is, then
+ * selects and centres the element; the Search tab stays.
+ */
+function revealSearchTarget(target: SearchTarget, open?: SearchOpen): void {
+  if (!current) return;
+  if (target.type === 'dataType') {
+    panel.showType(target.name);
+    return;
+  }
+  const levels = target.type === 'process' ? [] : target.levels;
+  const want = [current.path[0].id, ...levels, ...(open ? [open.levelId] : [])];
+  const reveal: PendingReveal = open
+    ? { id: open.stepId, path: want, byOriginalId: true, fromSearch: true }
+    : { id: target.type === 'process' ? undefined : target.id, path: want, fromSearch: true };
+  if (pathKey(currentPath()) === pathKey(want)) {
+    finishReveal(reveal);
+    return;
+  }
+  pendingReveal = reveal;
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'openCallee', calleeId: want[want.length - 1], path: want.slice(0, -1) });
+}
+
+// ---- Search -------------------------------------------------------------
+
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Searches the index of the shown render for the text in the search box and
+ * lists the result in the Search tab. `typed`: the user changed the query,
+ * which brings the Search tab to the front once there is something to search.
+ */
+function runSearch(typed: boolean): void {
+  if (!current) return;
+  const query = searchInput.value;
+  if (query.trim() === '') {
+    panel.setSearch(undefined);
+    return;
+  }
+  const result = search(current.search, query);
+  // One character does not start a search; it only updates one that is on.
+  if (result.tooShort && !panel.searching) return;
+  panel.setSearch({ result, index: current.search });
+  if (typed && !result.tooShort && panel.activeTab !== 'search') panel.showTab('search');
+}
+
+function searchTyped(): void {
+  state.search = searchInput.value;
+  vscode.setState(state);
+  if (searchTimer !== undefined) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = undefined;
+    runSearch(true);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function clearSearch(): void {
+  if (searchTimer !== undefined) clearTimeout(searchTimer);
+  searchTimer = undefined;
+  searchInput.value = '';
+  state.search = '';
+  vscode.setState(state);
+  runSearch(false);
+}
+
+searchInput.addEventListener('input', searchTyped);
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    // Escape here clears the search only; it does not go up a level.
+    e.preventDefault();
+    e.stopPropagation();
+    if (searchInput.value !== '') clearSearch();
+    else searchInput.blur();
+  } else if (e.key === 'ArrowDown') {
+    // The results of what is typed now, not of the last debounced query.
+    if (searchTimer !== undefined) {
+      clearTimeout(searchTimer);
+      searchTimer = undefined;
+      runSearch(true);
+    }
+    if (panel.focusFirstSearchResult()) e.preventDefault();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchTimer = undefined;
+    runSearch(true);
+  }
+});
+// The clear button of a search field.
+searchInput.addEventListener('search', () => {
+  if (searchInput.value === '') clearSearch();
+});
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      e.stopPropagation();
+      searchInput.focus();
+      searchInput.select();
+    }
+  },
+  true,
+);
 
 /**
  * A row of the Trace tab was clicked. Its element belongs to the chosen

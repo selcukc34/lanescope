@@ -10,7 +10,7 @@ export default tseslint.config(
     languageOptions: { globals: { process: 'readonly', console: 'readonly' } },
   },
   {
-    // Parsing, model, layout, validation, comparison and trace code must stay free of the
+    // Parsing, model, layout, validation, comparison, trace and search code must stay free of the
     // vscode module so it can be unit-tested in plain Node.
     // The pure parts of src/views and the webview UI follow the same rule.
     files: [
@@ -22,6 +22,7 @@ export default tseslint.config(
       'src/validate/**',
       'src/diff/**',
       'src/trace/**',
+      'src/search/**',
       'src/views/descriptionFiles.ts',
       'src/views/exportFiles.ts',
       'src/views/protocol.ts',

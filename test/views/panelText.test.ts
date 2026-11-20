@@ -1,7 +1,7 @@
 // Text helpers of the side panel (webview/panelText.ts, no DOM).
 
 import { describe, expect, it } from 'vitest';
-import { catchesLabel, insideSummary, isLinkedType, stepNote, changesTabTitle, clockTime, comparedWithText, NOTHING_TO_COMPARE, changeGroups } from '../../webview/panelText';
+import { catchesLabel, insideSummary, isLinkedType, stepNote, changesTabTitle, clockTime, comparedWithText, NOTHING_TO_COMPARE, changeGroups, searchTabTitle } from '../../webview/panelText';
 import type { DiffEntry } from '../../src/diff/diff';
 
 describe('panel text', () => {
@@ -93,5 +93,14 @@ describe('Changes tab rows', () => {
 
   it('does not take an inherited property for a drawn element', () => {
     expect(changeGroups({ added: [entry('node', 'Task "x"', { currentId: 'toString' })], changed: [], removed: [] }, {}).added[0].revealId).toBeUndefined();
+  });
+});
+
+describe('Search tab text', () => {
+  it('counts the groups with a match; no count while the query is too short', () => {
+    expect(searchTabTitle({ tooShort: true, groups: [] })).toBe('Search');
+    expect(searchTabTitle({ tooShort: false, groups: [] })).toBe('Search (0)');
+    const group = { group: { target: { type: 'process' as const }, kind: 'Process', name: 'P', where: [] }, hits: [] };
+    expect(searchTabTitle({ tooShort: false, groups: [group, group, group] })).toBe('Search (3)');
   });
 });

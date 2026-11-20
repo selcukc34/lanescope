@@ -50,6 +50,7 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
 | **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **Open Process Description** (**New Process Description** while `<name>-description.md` is not there yet) and **Clear Description Check**. |
+| **Search…** | Finds a word anywhere in the shown process (see [Search](#search)). **Cmd/Ctrl+F** focuses it, **Escape** clears it. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
@@ -324,11 +325,29 @@ How a description is attached:
 
 The comparison, the warnings and the exports are not affected by the check.
 
+## Search
+
+The **Search…** box in the toolbar lists every place a word appears in the shown process, in the **Search (N)** tab (N: the elements with a match). It is a plain, case-insensitive substring search of at least 2 characters, run locally as you type: no regular expressions, no AI, no network. The Turkish **İ** and **ı** match **i** and **I**.
+
+What is searched (when the file has it; Bob output has names, documentation, lanes, conditions, parameters and business objects; a `.twx` has the rest as well):
+
+- **Nodes:** name, documentation, lane, performer, what a call activity calls, its input and output mappings (parameter and expression, or "not mapped"), user task settings (assignment, priority, due date, subject), timer settings, script task code.
+- **Flows:** name and condition. The result is the flow itself.
+- **Inside called services** (one level, as the details panel shows it): step names, scripts, calls and their mappings, REST services and operations, gateway conditions, error boundaries, coach controls, their types and bindings, and the service's variables, inputs and outputs.
+- **Sub-processes:** the nodes and flows inside them, shown with the sub-process they are in.
+- **Data:** the process's variables, inputs and outputs, and the business objects and their fields (the XSD of Bob output included).
+
+Matches are listed per element, names first, then in diagram order, each with the field it is in and the text around it; at most 500 are listed ("Showing first 500 matches"). Click a row (or press **↓** in the box, **↑**/**↓** and **Enter**) to select the element, centre it and update its details; a match inside a sub-process opens that level first. A match inside a called service selects the activity that calls it; **Open in service** opens the service as a diagram and selects the step. The diagram is not marked otherwise.
+
+With `lanescope.showScripts` off, script code is not searched at all (it never reaches the diagram view) and the tab says "Scripts were not searched because lanescope.showScripts is off."
+
+Scope: the process shown (the one chosen in the toolbar for a `.twx`, whatever level is drawn), its sub-processes and the inside of the services it calls. Other processes of the file are not searched ("Only the shown process is searched."). The query is kept per editor and runs again after a live refresh or a toggle. Exports are not affected.
+
 ## Settings
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too. Open viewers update when the setting changes. |
+| `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too; [Search](#search) does not search scripts. Open viewers update when the setting changes. |
 | `lanescope.trace.autoDetectDescription` | `true` | Attach `<name>-description.md` or `<name>.md` next to the opened file as the [description](#description-traceability) to check against. Applies to viewers opened after the change. |
 
 ## Privacy

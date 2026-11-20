@@ -24,6 +24,7 @@ import type {
   VariableDetails,
 } from '../src/views/protocol';
 import type { DataType } from '../src/model/model';
+import { ONLY_SHOWN_PROCESS, SCRIPTS_NOT_SEARCHED, truncatedNote, type SearchHit, type SearchIndex, type SearchOpen, type SearchResult, type SearchResultGroup, type SearchTarget } from '../src/search/search';
 import type { TraceRow, TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import {
@@ -45,10 +46,11 @@ import {
   TRACE_STATUS_LABELS,
   traceDetail,
   traceGroups,
+  searchTabTitle,
   traceTabTitle,
 } from './panelText';
 
-export const TAB_IDS = ['details', 'data', 'warnings', 'changes', 'trace'] as const;
+export const TAB_IDS = ['details', 'data', 'warnings', 'changes', 'trace', 'search'] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 /** True for a known tab id; a saved webview state may hold anything. */
@@ -66,6 +68,16 @@ export interface ChangesActions {
   revealTrace(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void;
   /** Stop checking against the description. */
   clearDescription(): void;
+  /** Select what a search result points at (opening its level first); with `open`, the step of a called service. */
+  revealSearch(target: SearchTarget, open?: SearchOpen): void;
+  /** Arrow up from the first search result: back to the search box. */
+  focusSearchBox(): void;
+}
+
+/** What the Search tab lists: a search of the render's index. */
+export interface SearchView {
+  result: SearchResult;
+  index: SearchIndex;
 }
 
 /** Types that have a row in the Data tab, and how to show one there. */
@@ -109,6 +121,7 @@ export class SidePanel {
       ['warnings', 'Warnings'],
       ['changes', 'Changes'],
       ['trace', 'Trace'],
+      ['search', 'Search'],
     ] as Array<[TabId, string]>) {
       const button = h('button', { class: 'tab', role: 'tab', type: 'button', id: `tab-${id}` }, label);
       button.addEventListener('click', () => this.showTab(id));
@@ -119,6 +132,9 @@ export class SidePanel {
     }
     // Shown once a render carries a description check.
     this.tabs.get('trace')!.button.hidden = true;
+    // Shown while there is a search.
+    this.tabs.get('search')!.button.hidden = true;
+    this.tabs.get('search')!.body.addEventListener('keydown', (e) => this.onSearchKey(e));
     this.element = h('aside', { class: 'panel' }, tabBar, bodies);
     this.applyTab(initialTab);
   }
@@ -175,6 +191,103 @@ export class SidePanel {
     };
     const ctx: NodeContext = { types, callees: this.data.callees ?? {}, openCallee: (id) => this.onOpenCallee(id) };
     body.append(details ? renderElement(details, ctx) : renderProcess(this.data.process, types));
+  }
+
+  /** Shows a business object in the Data tab. */
+  showType(name: string): void {
+    this.revealType(name);
+  }
+
+  /** True while the Search tab is there (a search is on). */
+  get searching(): boolean {
+    return !this.tabs.get('search')!.button.hidden;
+  }
+
+  /**
+   * The Search tab: the results of `view`, or no tab at all when undefined
+   * (the search box was cleared). Matches are set as text, never as HTML.
+   */
+  setSearch(view: SearchView | undefined): void {
+    const { button, body } = this.tabs.get('search')!;
+    button.hidden = view === undefined;
+    clear(body);
+    if (!view) {
+      if (this.active === 'search') this.showTab('details');
+      return;
+    }
+    const { result, index } = view;
+    button.textContent = searchTabTitle(result);
+    if (index.scriptsOmitted > 0) body.append(h('p', { class: 'hint search-note' }, SCRIPTS_NOT_SEARCHED));
+    if (result.tooShort) {
+      body.append(h('p', { class: 'empty' }, 'Type at least 2 characters to search.'));
+    } else if (result.groups.length === 0) {
+      body.append(h('p', { class: 'empty search-empty' }, `No matches for "${result.query}"`));
+    } else {
+      body.append(...result.groups.map((g) => this.searchGroup(g)));
+      const cut = truncatedNote(result);
+      if (cut) body.append(h('p', { class: 'hint search-note' }, cut));
+    }
+    if (index.otherProcesses) body.append(h('p', { class: 'hint search-note' }, ONLY_SHOWN_PROCESS));
+  }
+
+  /** Focuses the first result (arrow down from the search box); false when there is none. */
+  focusFirstSearchResult(): boolean {
+    const first = this.searchNav()[0];
+    if (!first) return false;
+    if (this.active !== 'search') this.showTab('search');
+    first.focus();
+    return true;
+  }
+
+  private searchNav(): HTMLButtonElement[] {
+    return [...this.tabs.get('search')!.body.querySelectorAll<HTMLButtonElement>('.search-nav')];
+  }
+
+  /** Arrow up and down move through the results; up from the first goes back to the search box. */
+  private onSearchKey(e: KeyboardEvent): void {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const nav = this.searchNav();
+    const index = nav.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    e.preventDefault();
+    if (e.key === 'ArrowUp' && index === 0) this.changes.focusSearchBox();
+    else nav[Math.min(nav.length - 1, Math.max(0, index + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
+  }
+
+  /** A group: its element (kind, name, where it is) and one row per hit. */
+  private searchGroup(g: SearchResultGroup): HTMLElement {
+    const { group } = g;
+    const head = h(
+      'button',
+      { class: 'link search-head search-nav', type: 'button', title: 'Select in the diagram and show its details' },
+      h('span', { class: 'badge kind' }, group.kind),
+      h('span', { class: 'search-name' }, group.name || '(unnamed)'),
+      group.where.length > 0 ? h('span', { class: 'muted search-where' }, ` › ${group.where.join(' › ')}`) : null,
+    );
+    head.addEventListener('click', () => this.changes.revealSearch(group.target));
+    return h(
+      'section',
+      { class: 'search-group' },
+      head,
+      h('ul', { class: 'search-list' }, ...g.hits.map((hit) => this.searchRow(group.target, hit))),
+    );
+  }
+
+  private searchRow(target: SearchTarget, hit: SearchHit): HTMLElement {
+    const row = h(
+      'button',
+      { class: 'search-row search-nav', type: 'button', title: 'Select in the diagram and show its details' },
+      h('span', { class: 'search-label muted' }, hit.label),
+      h('span', { class: 'search-snippet' }, hit.before, h('mark', {}, hit.match), hit.after),
+    );
+    row.addEventListener('click', () => this.changes.revealSearch(target));
+    let open: HTMLButtonElement | null = null;
+    if (hit.open) {
+      const where = hit.open;
+      open = h('button', { class: 'link small search-open', type: 'button', title: 'Open the called service as a diagram and select this step' }, 'Open in service');
+      open.addEventListener('click', () => this.changes.revealSearch(target, where));
+    }
+    return h('li', { class: 'search-hit' }, row, open);
   }
 
   private revealType(name: string): void {

@@ -219,6 +219,7 @@ button {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   flex: none;
   border-bottom: 1px solid var(--vscode-panel-border, transparent);
 }
@@ -891,4 +892,103 @@ table.grid td {
 .menu-item:disabled:hover {
   background: none;
   color: inherit;
+}
+
+/* ---- Search ------------------------------------------------------------ */
+
+.search-input {
+  width: 160px;
+  min-width: 90px;
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.search-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.search-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.search-group {
+  margin: 0 0 10px;
+}
+
+.search-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.search-head .search-where {
+  font-weight: normal;
+}
+
+.search-list {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0 0 0 8px;
+}
+
+.search-hit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+}
+
+.search-row {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-row:hover,
+.search-row:focus {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.search-row:focus,
+.search-head:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.search-label {
+  font-size: 0.9em;
+}
+
+.search-snippet {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95em;
+  word-break: break-word;
+}
+
+.search-snippet mark {
+  color: inherit;
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  border-radius: 2px;
+}
+
+.search-open {
+  font-size: 0.9em;
 }

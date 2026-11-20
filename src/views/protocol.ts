@@ -3,6 +3,7 @@
 
 import type { DiffEntry, DiffMark } from '../diff/diff';
 import type { CalleeStepKind, DataType } from '../model/model';
+import type { SearchIndex } from '../search/search';
 import type { TraceCounts, TraceRow } from '../trace/trace';
 import { MAX_PATH_DEPTH } from './navigation';
 
@@ -314,6 +315,12 @@ export interface RenderMessage {
   trace?: TraceView;
   /** Once, on the render that follows a description picked with Check Against Description…: show the Trace tab. */
   showTrace?: true;
+  /**
+   * What the keyword search looks at: the chosen process (whatever level is
+   * drawn), its sub-processes and the inside of the services it calls. No
+   * script text when showScripts is off.
+   */
+  search: SearchIndex;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */

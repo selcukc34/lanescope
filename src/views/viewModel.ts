@@ -19,6 +19,7 @@ import { toDiagramXml } from '../bpmn/toDiagramXml';
 import { KIND_LABELS } from '../model/labels';
 import { childCounts, subProcessLevelId } from '../model/subProcess';
 import { validateProcess } from '../validate/validate';
+import { buildSearchIndex } from '../search/searchIndex';
 import {
   DEFAULT_VIEWER_SETTINGS,
   type CalleeDetails,
@@ -221,6 +222,7 @@ export async function buildRenderMessage(
     dataTypes: pkg.dataTypes,
     warnings: [...new Set(warnings)],
     loadedAt,
+    search: buildSearchIndex(pkg, { processId: root.id, showScripts: settings.showScripts }),
   };
 }
 

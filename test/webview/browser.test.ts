@@ -21,7 +21,7 @@ import type { RenderMessage } from '../../src/views/protocol';
 import { ViewerSession } from '../../src/views/viewerSession';
 import { buildCsp } from '../../src/views/webviewHtml';
 import { NOTIFY_TASK_ID, V1_ZIP, V2_ZIP } from '../bobV2';
-import { syntheticTwxPackage } from '../syntheticTwx';
+import { BPD_ID, PRICE_SERVICE_ID, syntheticTwxPackage } from '../syntheticTwx';
 
 const DESCRIPTION_MD = path.join(__dirname, '..', 'fixtures', 'bob', 'order-delivery-process-description.md');
 
@@ -753,5 +753,205 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     expect(renderAgain.showChanges).toBeUndefined();
     await page.open(url, renderAgain, `document.getElementById('tab-data').click()`);
     expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Data');
+  });
+
+  describe('keyword search', () => {
+    /** Types into the search box (real key input) and waits out the debounce. */
+    const typeSearch = async (text: string) => {
+      await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); i.select(); })()`);
+      await page.send('Input.insertText', { text });
+      await page.eval('new Promise((r) => setTimeout(r, 320))');
+    };
+    type SearchUi = { tab: string | null; active: string; groups: string[]; rows: string[]; marks: string[]; empty: string | null; notes: string[]; state: unknown };
+    const searchUi = `({
+      tab: (() => { const b = document.getElementById('tab-search'); return b.hidden ? null : b.textContent; })(),
+      active: document.querySelector('.tab.active').textContent,
+      groups: [...document.querySelectorAll('.search-head')].map((e) => e.textContent),
+      rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
+      marks: [...document.querySelectorAll('.search-row mark')].map((e) => e.textContent),
+      empty: document.querySelector('.search-empty')?.textContent ?? null,
+      notes: [...document.querySelectorAll('.search-note')].map((e) => e.textContent),
+      state: window.__state,
+    })`;
+    const focused = `(() => { const a = document.activeElement; return a.classList.contains('search-input') ? 'input' : a.textContent; })()`;
+
+    it('is always in the toolbar, next to Trace, with its placeholder and tooltip', async () => {
+      await page.open(url, trace.found);
+      const box = await page.eval<{ placeholder: string; title: string; after: string }>(`(() => { const i = document.querySelector('.search-input'); return { placeholder: i.placeholder, title: i.title, after: i.previousElementSibling.textContent }; })()`);
+      expect(box).toEqual({ placeholder: 'Search…', title: 'Search names, documentation, scripts, conditions… (Cmd/Ctrl+F)', after: expect.stringContaining('Trace') });
+      // No tab until there is a search.
+      expect((await page.eval<SearchUi>(searchUi)).tab).toBeNull();
+    });
+
+    it('opens the Search tab on typing, with the count of groups and highlighted matches', async () => {
+      await page.open(url, trace.found);
+      await typeSearch('Validate');
+      const ui = await page.eval<SearchUi>(searchUi);
+      expect(ui.tab).toBe(`Search (${ui.groups.length})`);
+      expect(ui.active).toBe(ui.tab);
+      expect(ui.groups.slice(0, 2)).toEqual(['TaskValidate Order SF', 'Sequence flowTo Validate Order SF']);
+      expect(ui.rows[0]).toBe('NameValidate Order SF');
+      expect(ui.marks.every((m) => m.toLowerCase() === 'validate')).toBe(true);
+      expect(ui.state).toMatchObject({ search: 'Validate', tab: 'search' });
+      // Nothing is drawn on the canvas for a match.
+      expect(await page.eval<number>(`document.querySelectorAll('.djs-element.ls-selected, .djs-element.selected').length`)).toBe(0);
+    });
+
+    it('selects and centres the element of a clicked row, updates Details and stays on Search', async () => {
+      await page.open(url, trace.found);
+      // Zoomed in, so the gateway is off-centre.
+      await page.eval(`(() => { const plus = [...document.querySelectorAll('button')].find((b) => b.textContent === '+'); for (let i = 0; i < 6; i++) plus.click(); })()`);
+      await typeSearch('EXCEPTION');
+      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent.includes('tw.local.order.route != "EXCEPTION"')).click()`);
+      const after = await page.eval<{ selected: string[]; details: string; tab: string; offset: number }>(`(() => {
+        const el = document.querySelector('.djs-element.selected').getBoundingClientRect();
+        const c = document.querySelector('.canvas').getBoundingClientRect();
+        return {
+          selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+          details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+          tab: document.querySelector('.tab.active').textContent,
+          offset: Math.max(Math.abs(el.x + el.width / 2 - (c.x + c.width / 2)), Math.abs(el.y + el.height / 2 - (c.y + c.height / 2))),
+        };
+      })()`);
+      const validId = Object.values(trace.found.elements).find((e) => e.kind === 'flow' && e.name === 'Valid')!.id;
+      expect(after.selected).toEqual([validId]);
+      expect(after.details).toBe('Valid');
+      expect(after.tab).toMatch(/^Search \(/);
+      expect(after.offset).toBeLessThan(4);
+      // The group head selects the element too.
+      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('Route Order')).click()`);
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([ROUTE_GATEWAY_ID]);
+      expect(await page.eval<string[]>('window.__errors')).toEqual([]);
+    });
+
+    it('Cmd/Ctrl+F focuses the box, Escape clears it and closes the tab without leaving the level', async () => {
+      await page.open(url, trace.found);
+      await page.eval(`document.querySelector('.canvas').focus()`);
+      for (const modifiers of [2, 4]) {
+        await page.eval(`document.querySelector('.canvas').focus()`);
+        for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70, modifiers });
+        expect(await page.eval<string>(focused)).toBe('input');
+      }
+      await typeSearch('order');
+      expect((await page.eval<SearchUi>(searchUi)).tab).toMatch(/^Search \(\d+\)$/);
+      await page.pressKey('Escape', 'Escape', 27);
+      const ui = await page.eval<SearchUi & { value: string }>(`({ ...${searchUi}, value: document.querySelector('.search-input').value })`);
+      expect(ui).toMatchObject({ value: '', tab: null, active: 'Details', state: { search: '' } });
+      expect(await page.eval<string>(focused)).toBe('input');
+    });
+
+    it('works from the keyboard: arrow down into the results, up and down, Enter goes there', async () => {
+      await page.open(url, trace.found);
+      await typeSearch('Validate');
+      await page.pressKey('ArrowDown', 'ArrowDown', 40);
+      expect(await page.eval<string>(focused)).toBe('TaskValidate Order SF');
+      await page.pressKey('ArrowDown', 'ArrowDown', 40);
+      expect(await page.eval<string>(focused)).toBe('NameValidate Order SF');
+      // Its documentation ("Validates the OrderRequest…") is the next row of the group.
+      await page.pressKey('ArrowDown', 'ArrowDown', 40);
+      expect(await page.eval<string>(focused)).toMatch(/^DocumentationValidates the OrderRequest/);
+      await page.pressKey('ArrowUp', 'ArrowUp', 38);
+      expect(await page.eval<string>(focused)).toBe('NameValidate Order SF');
+      await page.pressEnter();
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([
+        'bpmnid-ca534cf5-ff40-5898-873c-68c5b8ff5674',
+      ]);
+      await page.pressKey('ArrowUp', 'ArrowUp', 38);
+      await page.pressKey('ArrowUp', 'ArrowUp', 38);
+      expect(await page.eval<string>(focused)).toBe('input');
+    });
+
+    it('says when nothing matches, and that one character is not searched', async () => {
+      await page.open(url, trace.found);
+      await typeSearch('zzqx');
+      expect(await page.eval<SearchUi>(searchUi)).toMatchObject({ tab: 'Search (0)', empty: 'No matches for "zzqx"', rows: [] });
+      await typeSearch('z');
+      expect(await page.eval<string>(`document.querySelector('[aria-labelledby="tab-search"]').textContent`)).toContain('Type at least 2 characters');
+      // From a fresh start, one character opens nothing.
+      await page.open(url, trace.found);
+      await typeSearch('o');
+      expect((await page.eval<SearchUi>(searchUi)).tab).toBeNull();
+    });
+
+    it('prints a name holding HTML as text', async () => {
+      const bpmn = SUB_BPMN.replace('name="Pick Items"', 'name="&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;Pick &lt;b&gt;Items&lt;/b&gt;"');
+      const r = await plainRender(await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: bpmn, xsdFiles: {} }));
+      await page.open(url, r);
+      await typeSearch('Pick');
+      const ui = await page.eval<{ rows: string[]; heads: string[]; imgs: number; bold: number; xss: unknown }>(`({
+        rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
+        heads: [...document.querySelectorAll('.search-head')].map((e) => e.textContent),
+        imgs: document.querySelectorAll('.panel img').length,
+        bold: document.querySelectorAll('.panel b').length,
+        xss: window.__xss,
+      })`);
+      expect(ui.heads[0]).toBe('Task<img src=x onerror="window.__xss=1">Pick <b>Items</b> › Prepare');
+      expect(ui.rows[0]).toBe('Name<img src=x onerror="window.__xss=1">Pick <b>Items</b>');
+      expect(ui).toMatchObject({ imgs: 0, bold: 0 });
+      expect(ui.xss).toBeUndefined();
+    });
+
+    it('opens the sub-process a result is in, then selects it there', async () => {
+      await page.open(url, drillRender);
+      await typeSearch('Pick Items');
+      await page.eval('window.__posted.length = 0');
+      await page.eval(`document.querySelector('.search-row').click()`);
+      expect(await page.eval<unknown[]>(`window.__posted.filter((m) => m.type === 'openCallee')`)).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
+      // The host draws the level; the result is selected there and the search runs again on it.
+      const level = await new Promise<RenderMessage>((resolve) => {
+        const renders: RenderMessage[] = [];
+        const s = new ViewerSession({ fileName: 'order.bpmn', load: async () => readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }), post: (m) => void (m.type === 'render' && renders.push(m)) });
+        void s.handleMessage({ type: 'ready' }).then(() => s.handleMessage({ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] })).then(() => resolve(renders[renders.length - 1]));
+      });
+      await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
+      const ui = await page.eval<{ selected: string[]; details: string; tab: string; rows: string[] }>(`({
+        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+        tab: document.querySelector('.tab.active').textContent,
+        rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
+      })`);
+      expect(ui).toEqual({ selected: ['pick'], details: 'Pick Items', tab: 'Search (1)', rows: ['NamePick Items'] });
+    });
+
+    it('"Open in service" opens the called service and selects the step there; the row itself selects the caller', async () => {
+      const renders: RenderMessage[] = [];
+      const s = new ViewerSession({ fileName: 'synthetic.twx', load: () => syntheticTwxPackage(), post: (m) => void (m.type === 'render' && renders.push(m)) });
+      await s.handleMessage({ type: 'ready' });
+      const top = renders[renders.length - 1];
+      await page.open(url, top);
+      await typeSearch('Compute Total');
+      const reviewId = Object.values(top.elements).find((e) => e.name === 'Review Order')!.id;
+      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'StepCompute Total').click()`);
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([reviewId]);
+
+      await page.eval('window.__posted.length = 0');
+      await page.clickButton('Open in service');
+      const posted = await page.eval<Array<{ calleeId: string; path: string[] }>>(`window.__posted.filter((m) => m.type === 'openCallee')`);
+      expect(posted).toEqual([{ type: 'openCallee', calleeId: PRICE_SERVICE_ID, path: [BPD_ID] }]);
+      await s.handleMessage(posted[0]);
+      const level = renders[renders.length - 1];
+      expect(level.path.map((l) => l.name)).toEqual(['Synthetic Order', 'Price Order']);
+      await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
+      const stepId = Object.values(level.elements).find((e) => e.originalId === 'svc:script' || e.id === 'svc:script')!.id;
+      const ui = await page.eval<{ selected: string[]; details: string; tab: string }>(`({
+        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
+        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+        tab: document.querySelector('.tab.active').textContent,
+      })`);
+      expect(ui).toMatchObject({ selected: [stepId], details: 'Compute Total' });
+      expect(ui.tab).toMatch(/^Search \(/);
+      expect(await page.eval<string[]>('window.__errors')).toEqual([]);
+    });
+
+    it('keeps the query in the webview state and searches again after a rebuild and a re-render', async () => {
+      await page.open(`${url}?state=${encodeURIComponent(JSON.stringify({ tab: 'search', search: 'EXCEPTION' }))}`, trace.found);
+      const first = await page.eval<SearchUi & { value: string }>(`({ ...${searchUi}, value: document.querySelector('.search-input').value })`);
+      expect(first.value).toBe('EXCEPTION');
+      expect(first.active).toBe(first.tab);
+      expect(first.rows.length).toBeGreaterThan(1);
+      // A live refresh (another render of the same level) runs the search again.
+      await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...trace.found, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+      expect((await page.eval<SearchUi>(searchUi)).rows).toEqual(first.rows);
+    });
   });
 });
