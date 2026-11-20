@@ -3,6 +3,7 @@
 
 import type { DiffEntry, DiffMark } from '../diff/diff';
 import type { CalleeStepKind, DataType } from '../model/model';
+import type { TraceCounts, TraceRow } from '../trace/trace';
 import { MAX_PATH_DEPTH } from './navigation';
 
 /** Display options the user can toggle in the webview toolbar. */
@@ -259,6 +260,25 @@ export interface DiffView {
   note?: string;
 }
 
+/**
+ * The check of the chosen process against a description (src/trace). Only
+ * names from the description and the process: never script text or conditions.
+ */
+export interface TraceView {
+  /** File name of the description. */
+  fileName: string;
+  /** "24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra"; empty with `error` or without sections. */
+  summary: string;
+  counts: TraceCounts;
+  rows: TraceRow[];
+  /** Headings of the sections that are not checked. */
+  notChecked: string[];
+  /** Why the description could not be checked (unreadable, too large); no rows then. */
+  error?: string;
+  /** A note on what the description lacks: no checked section at all (no rows then), or no Main process steps section. */
+  notice?: string;
+}
+
 /** Host -> webview: draw a diagram. */
 export interface RenderMessage {
   type: 'render';
@@ -290,6 +310,10 @@ export interface RenderMessage {
    * switches its side panel to the Changes tab. Never set on any other render.
    */
   showChanges?: true;
+  /** The check against the attached description; undefined while none is attached. */
+  trace?: TraceView;
+  /** Once, on the render that follows a description picked with Check Against Description…: show the Trace tab. */
+  showTrace?: true;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */
@@ -328,7 +352,13 @@ export interface ExportSourceMessage {
   xml: string;
 }
 
-export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage;
+/** Host -> webview: whether <base>-description.md is there, so the Trace menu says Open or New. */
+export interface DescriptionStatusMessage {
+  type: 'descriptionStatus';
+  exists: boolean;
+}
+
+export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage | DescriptionStatusMessage;
 
 /** Webview -> host: the webview script is loaded and listening. */
 export interface ReadyMessage {
@@ -368,6 +398,26 @@ export interface ClearComparisonMessage {
   type: 'clearComparison';
 }
 
+/** Webview -> host: the Trace button asks to pick a description (as Lanescope: Check Against Description…). */
+export interface CheckDescriptionMessage {
+  type: 'checkDescription';
+}
+
+/** Webview -> host: the Trace menu asks to open the description, written from the template when missing (as Lanescope: New or Open Process Description). */
+export interface NewDescriptionMessage {
+  type: 'newDescription';
+}
+
+/** Webview -> host: is <base>-description.md there? Answered with a DescriptionStatusMessage. */
+export interface DescriptionStatusRequestMessage {
+  type: 'descriptionStatus';
+}
+
+/** Webview -> host: stop checking against the attached description. */
+export interface ClearDescriptionMessage {
+  type: 'clearDescription';
+}
+
 /** Webview -> host: the user asked to export the drawn diagram. */
 export interface ExportRequestMessage {
   type: 'exportRequest';
@@ -402,7 +452,11 @@ export type WebviewMessage =
   | ExportRequestMessage
   | ExportDataMessage
   | CompareRequestMessage
-  | ClearComparisonMessage;
+  | ClearComparisonMessage
+  | ClearDescriptionMessage
+  | CheckDescriptionMessage
+  | NewDescriptionMessage
+  | DescriptionStatusRequestMessage;
 
 /** A webview message after parseWebviewMessage. */
 export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
@@ -428,7 +482,7 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
   const msg = value as Record<string, unknown>;
   if (msg.type === 'ready') return { type: 'ready' };
   // Messages without a payload: anything besides the type is refused.
-  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison') && onlyKeys(msg, ['type'])) return { type: msg.type };
+  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison' || msg.type === 'clearDescription' || msg.type === 'checkDescription' || msg.type === 'newDescription' || msg.type === 'descriptionStatus') && onlyKeys(msg, ['type'])) return { type: msg.type };
   if (msg.type === 'exportRequest' && isExportFormat(msg.format)) return { type: 'exportRequest', format: msg.format };
   if (msg.type === 'exportData') return parseExportData(msg, expected);
   if (msg.type === 'selectProcess' && typeof msg.processId === 'string' && msg.processId.length > 0) {

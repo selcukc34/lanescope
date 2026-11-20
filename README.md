@@ -49,7 +49,10 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **Highlight changes** | Marks added (green) and changed (amber) elements of the [comparison](#comparing-versions) in the diagram. On by default; the Changes tab lists them either way. |
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
+| **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **Open Process Description** (**New Process Description** while `<name>-description.md` is not there yet) and **Clear Description Check**. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
+
+Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
 
 Changing a toggle redraws the diagram and keeps the zoom and the selection. The toggles keep their state across live refresh, the process selector and opened services; the default by input type applies only when the file is first opened.
 
@@ -156,11 +159,177 @@ How elements are paired: by id first (Bob keeps its ids when it generates a proc
 - Sub-processes are part of their process. The lanes of a sub-process's own diagram pair like the process lanes (by id, else by name) within each pair of sub-processes. A collapsed sub-process with added, changed or removed elements inside it (its lanes included) is marked changed, and its row says **Inner changes: N**. Inside an opened sub-process the Changes tab lists the comparison of the process, and the elements drawn there are marked. A row of an element that is not drawn at the shown level selects the sub-process that holds it.
 - Exports never hold the change marks.
 
+## Lanescope description format
+
+A process description is a Markdown file. Lanescope checks four `##` sections; their headings must be written exactly as below (any case). Every other heading is free text and is not checked (for example *Business scenario*, *Validation rules*, *Routing rules*, *Expected output*).
+
+- `## Main process steps` (required): a numbered or bulleted list. Each item is the name of an activity, gateway or event, in order.
+- `## Gateway paths` (optional): a list of the names of a gateway's outgoing flows. Say which gateway with "after &lt;step&gt;" in a sentence above the list ("The gateway after Determine Order Route should have four outgoing paths:"), or with a `### After <step>` sub-heading. Use one `### After <step>` per gateway to describe several gateways. Without either, the paths may belong to any gateway. In the sentence, the step name ends at *should*, *must*, *shall*, *will*, *has*, *have*, *is*, *are*, at `,` `:` `;` `.` `(` or at the end of the line. List items under any other sub-heading are not paths.
+- `## Business object` (optional): a `<Name>:` line or a `### <Name>` sub-heading, then a list of its fields. Repeat for several business objects. Fields before the first name are not read.
+- `## Human tasks` (optional): a `### <task>` sub-heading per user task, then a list of the fields it shows.
+
+In every section:
+
+- A list item's name is its text up to the first `:`, ` (` or ` - `. Bold, italics, code marks and links are ignored.
+- Only top-level list items count (indented by at most three spaces). Other lines are free text.
+- Code blocks and HTML comments (`<!-- … -->`) are skipped.
+- A description may be at most 1 MB.
+
+Example (shortened from Bob's description of the Order Delivery Process):
+
+```markdown
+# Order Delivery Process Description
+
+## Business scenario
+
+A customer submits an order. It is validated, routed and completed.
+
+## Main process steps
+
+1. Submit Order
+2. Validate Order
+3. Determine Order Route
+4. Route Order
+5. Manager Approval
+
+## Gateway paths
+
+The gateway after Determine Order Route should have four outgoing paths:
+
+- AUTO_APPROVE
+- MANAGER_APPROVAL
+- COMPLIANCE_REVIEW
+- EXCEPTION
+
+## Business object
+
+OrderRequest:
+
+- orderId
+- amount
+- route
+
+## Human tasks
+
+### Manager Approval
+
+The manager reviews:
+
+- orderId
+- amount
+```
+
+**Lanescope: New or Open Process Description** (the Command Palette or the editor's **…** menu, with a diagram open; in the **▾** menu next to the **Trace** button it reads **Open Process Description** or **New Process Description**) opens `<name>-description.md` next to the opened file beside the diagram and checks the diagram against it. When the file is not there yet, it first writes it as an empty description in this format. It never writes over a file: an existing description is opened as it is, without a question. The template is fixed text; nothing is taken from the process.
+
+### Asking Bob to use this format
+
+When you ask IBM Bob to write the description of a process, add this to your prompt:
+
+> When you write the process description, use the Lanescope description format: a Markdown file with the sections "## Main process steps" (a numbered list of the exact activity, gateway and event names), "## Gateway paths" (for each gateway, "The gateway after <step> should have N outgoing paths:" or a "### After <step>" sub-heading, then a list of the outgoing flow names), "## Business object" (a "<Name>:" line, then a list of the field names) and "## Human tasks" (a "### <task name>" sub-heading per user task, then a list of the fields it shows). Use the same names in the description and in the generated process. Put rules and other explanations in other sections. Start from this template:
+
+```markdown
+# Process Description
+
+<!-- Lanescope description format. Only the four sections Main process steps,
+     Gateway paths, Business object and Human tasks are checked; every other
+     "##" section is free text. Replace the placeholder items below. -->
+
+## Business scenario
+
+<!-- Free text, not checked. -->
+
+Describe what the process does and who takes part.
+
+## Main process steps
+
+<!-- Required. One activity, gateway or event name per item, in order. -->
+
+1. Receive Request
+2. Check Request
+3. Route Request
+4. Approve Request
+5. Reject Request
+
+## Gateway paths
+
+<!-- Optional. The names of the outgoing flows of a gateway. Name the step the
+     gateway follows with "after <step>" in a sentence, or with one
+     "### After <step>" sub-heading per gateway. -->
+
+The gateway after Check Request should have two outgoing paths:
+
+- APPROVE
+- REJECT
+
+## Business object
+
+<!-- Optional. A "<Name>:" line or a "### <Name>" sub-heading, then its fields.
+     Repeat for more business objects. -->
+
+RequestData:
+
+- requestId
+- status
+
+## Human tasks
+
+<!-- Optional. One "### <task>" sub-heading per user task, then the fields it shows. -->
+
+### Approve Request
+
+- requestId
+- status
+
+## Expected output
+
+<!-- Free text, not checked. -->
+
+Describe what should be generated.
+```
+
+## Description traceability
+
+The **Trace** tab checks the shown process against a description in the [Lanescope description format](#lanescope-description-format), for example `order-delivery-process-description.md`, and answers two questions with a checklist: is everything the description names drawn, and is anything drawn that the description does not name?
+
+It matches **names only**, deterministically: no AI, no network. It does not check the logic of the process (conditions such as `amount > 10000`, routing rules, validation rules).
+
+| Section | Compared with |
+| --- | --- |
+| Main process steps | activities, gateways and events of the process (also inside its sub-processes) |
+| Gateway paths | the names of the outgoing flows of the first gateway after the named step, else string literals in their conditions; without a step, the gateway whose outgoing flows carry the most of the names |
+| Business object | the fields of the XSD (Bob) or TWX business object of that name |
+| Human tasks | the bindings of the coach controls of the human service the task calls (TWX); Bob output has none, so these rows show as not checked |
+
+Each row shows:
+
+- **✓ exact**: the same name.
+- **≈ near**: the same name after normalising (case, spaces, `_` and `-`, technical suffixes such as ` SF`, ` Service`, ` Task`), or the same words in another order ("Submit Order" and the start event "Order Submitted"). The row says what it matched, e.g. "matched as 'Validate Order SF'".
+- **✗ missing**: nothing in the process has the name.
+- **? unchecked**: the process holds nothing to compare with.
+- **+ extra**: an activity or gateway (top level), an outgoing flow of a checked gateway or a field of a checked business object that the description does not name. Start, end and other events are never extra.
+
+The summary counts only what the process can answer: "24 of 24 checkable items found (19 exact, 5 near) · 0 missing · 17 unchecked · 1 extra". The tab title counts missing items only, e.g. **Trace (2)**: extra items are usually normal additions (Bob adds a validation gateway and end events). A description with none of the four sections shows one line: "No checkable sections found in &lt;file&gt;. Lanescope reads the Lanescope description format, see the README."
+
+Each node of the process stands for one step at most. Click a row to select its node or flow (opening the sub-process it is in) and show its details; a field row opens the business object in the Data tab. The diagram is not marked. The check covers the process chosen in the toolbar, whatever level is drawn.
+
+How to open it: the **Trace** button in the diagram's toolbar. With no description attached, **Trace** asks for one; once one is attached, it opens the Trace tab, and a badge on it counts the missing items (no badge when nothing is missing). Its tooltip names the description. The **▾** next to it holds the three description commands, which are also in the Command Palette and the editor's **…** menu.
+
+How a description is attached:
+
+- **Found next to the file.** When `<name>-description.md` or `<name>.md` sits next to the opened `.bpmn`, `.zip` or `.twx` (same name without the extension), it is attached when the viewer opens; the Trace tab appears but is not opened. Turn this off with `lanescope.trace.autoDetectDescription`.
+- **Picked.** **Trace** (or **▾ › Check Against Description…**, or **Lanescope: Check Against Description…** in the Command Palette or the editor's **…** menu) asks for a `.md` file and opens the Trace tab.
+- **Opened or written.** **Lanescope: New or Open Process Description** opens and attaches `<name>-description.md`, writing it from the template first when it is not there (see above).
+- The choice is remembered per file in the workspace. **Clear** in the Trace tab or **Lanescope: Clear Description Check** removes it (and stops a found description from being attached again for that file).
+- The description is watched: the check runs again when it or the process changes on disk. Lanescope only reads it.
+
+The comparison, the warnings and the exports are not affected by the check.
+
 ## Settings
 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too. Open viewers update when the setting changes. |
+| `lanescope.trace.autoDetectDescription` | `true` | Attach `<name>-description.md` or `<name>.md` next to the opened file as the [description](#description-traceability) to check against. Applies to viewers opened after the change. |
 
 ## Privacy
 
@@ -171,8 +340,9 @@ How elements are paired: by id first (Bob keeps its ids when it generates a proc
 ## Read-only guarantee
 
 - The extension only reads the files you open. It never writes, changes, renames or deletes a `.bpmn`, `.xsd`, `.zip` or `.twx` file, and it never deploys anything.
-- The one file it writes is an [export](#export), to a new file you pick, never to the opened file or an input type.
+- The files it writes are new files only: an [export](#export), to a file you pick, never to the opened file or an input type, and a new [description](#lanescope-description-format) from the template.
 - A file picked to [compare with](#comparing-versions) is only read, never watched or written.
+- A [description](#description-traceability) is only read and watched, never written. **New or Open Process Description** writes a new `.md` from a fixed template next to the opened file only when no file of that name exists; an existing one is only opened, never written.
 - Archives are read in memory; nothing is extracted to disk.
 - The diagram view runs under a strict Content Security Policy, uses only scripts bundled in the extension, and makes no network requests.
 

@@ -9,6 +9,7 @@ import './main.css';
 import NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
 import { isPathPrefix, pathKey } from '../src/views/navigation';
 import type {
+  DescriptionStatusMessage,
   ErrorMessage,
   ExportFormat,
   ExportSourceMessage,
@@ -18,11 +19,14 @@ import type {
   ViewOptions,
   WebviewMessage,
 } from '../src/views/protocol';
+import type { TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
 import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
+import { DropdownMenu } from './menu';
 import { isTabId, SidePanel, type TabId } from './panel';
+import { traceTabTitle } from './panelText';
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -45,6 +49,8 @@ interface Viewbox {
 interface DiagramElement {
   id: string;
   type: string;
+  /** Set on an external label: the element it belongs to. */
+  labelTarget?: DiagramElement;
 }
 
 interface Canvas {
@@ -52,6 +58,7 @@ interface Canvas {
   viewbox(box?: Viewbox): Viewbox & { scale: number };
   resized(): void;
   addMarker(element: DiagramElement, marker: string): void;
+  removeMarker(element: DiagramElement, marker: string): void;
   scrollToElement(element: DiagramElement, padding?: number): void;
 }
 
@@ -64,7 +71,7 @@ interface Selection {
 }
 
 interface EventBus {
-  on(event: string, callback: (e: { element?: { id: string; type: string } }) => void): void;
+  on(event: string, callback: (e: { element?: DiagramElement; oldSelection?: DiagramElement[]; newSelection?: DiagramElement[] }) => void): void;
 }
 
 /** What is brought back when the user returns to a level: the view and the selection. */
@@ -98,23 +105,57 @@ const updated = h('span', { class: 'updated muted', hidden: '' });
 
 // Export: a button with a small menu of the formats.
 const exportButton = button('Export', 'Export the diagram to a new file');
-exportButton.setAttribute('aria-haspopup', 'menu');
-exportButton.setAttribute('aria-expanded', 'false');
 const EXPORT_ITEMS: Array<{ format: ExportFormat; text: string; tooltip?: string }> = [
   { format: 'bpmn', text: 'BPMN with layout, no scripts (.bpmn)', tooltip: 'Diagram and layout only. Script code is never exported.' },
   { format: 'svg', text: 'SVG image (.svg)' },
   { format: 'png', text: 'PNG image (.png)' },
 ];
-const exportItems = EXPORT_ITEMS.map(({ format, text, tooltip }) => {
-  const item = h('button', { type: 'button', class: 'menu-item', role: 'menuitem', tabindex: '-1', ...(tooltip ? { title: tooltip } : {}) }, text);
-  item.addEventListener('click', () => {
-    closeExportMenu(true);
-    vscode.postMessage({ type: 'exportRequest', format });
-  });
-  return item;
+const exportGroup = h('span', { class: 'menu-anchor' }, exportButton);
+const exportMenu = new DropdownMenu(
+  exportButton,
+  'Export as',
+  EXPORT_ITEMS.map(({ format, text, tooltip }) => ({ text, tooltip, run: () => vscode.postMessage({ type: 'exportRequest', format }) })),
+  () => exportGroup,
+);
+exportGroup.append(exportMenu.element);
+
+// Trace: a split button. The main part shows the Trace tab (or asks for a description when none is attached);
+// the arrow opens the description commands. The host runs them as it runs the Lanescope commands.
+const TRACE_IDLE_TOOLTIP = 'Check this process against a description';
+const NEW_DESCRIPTION_LABEL = 'New Process Description';
+const OPEN_DESCRIPTION_LABEL = 'Open Process Description';
+const NEW_DESCRIPTION_TOOLTIP = 'Write <name>-description.md from a template next to the opened file, open it and check against it';
+const OPEN_DESCRIPTION_TOOLTIP = 'Open <name>-description.md next to the opened file and check against it';
+const traceBadge = h('span', { class: 'count-badge', hidden: '' });
+const traceButton = h('button', { type: 'button', class: 'button split-main', title: TRACE_IDLE_TOOLTIP }, 'Trace', traceBadge);
+const traceArrow = h('button', { type: 'button', class: 'button split-arrow', title: 'Description commands', 'aria-label': 'Description commands' }, '▾');
+const traceGroup = h('span', { class: 'menu-anchor split' }, traceButton, traceArrow);
+const traceMenu = new DropdownMenu(
+  traceArrow,
+  'Description',
+  [
+    { text: 'Check Against Description…', tooltip: 'Pick a Markdown description to check this process against', run: () => vscode.postMessage({ type: 'checkDescription' }) },
+    // Its label follows the host's answer to descriptionStatus: Open when <name>-description.md is there.
+    { text: NEW_DESCRIPTION_LABEL, tooltip: NEW_DESCRIPTION_TOOLTIP, run: () => vscode.postMessage({ type: 'newDescription' }) },
+    { text: 'Clear Description Check', tooltip: 'Stop checking against the description', run: () => vscode.postMessage({ type: 'clearDescription' }) },
+  ],
+  () => traceGroup,
+  // The file may have come or gone since the last answer: ask again.
+  () => vscode.postMessage({ type: 'descriptionStatus' }),
+);
+traceGroup.append(traceMenu.element);
+const traceDescriptionItem = traceMenu.items[1];
+const traceClearItem = traceMenu.items[2];
+
+/** The Trace menu's second item: Open when <name>-description.md is there (it is then only opened), else New. */
+function showDescriptionStatus(msg: DescriptionStatusMessage): void {
+  traceDescriptionItem.textContent = msg.exists ? OPEN_DESCRIPTION_LABEL : NEW_DESCRIPTION_LABEL;
+  traceDescriptionItem.title = msg.exists ? OPEN_DESCRIPTION_TOOLTIP : NEW_DESCRIPTION_TOOLTIP;
+}
+traceButton.addEventListener('click', () => {
+  if (current?.trace) panel.showTab('trace');
+  else vscode.postMessage({ type: 'checkDescription' });
 });
-const exportMenu = h('div', { class: 'menu', role: 'menu', 'aria-label': 'Export as', hidden: '' }, ...exportItems);
-const exportGroup = h('span', { class: 'menu-anchor' }, exportButton, exportMenu);
 
 const toolbar = h(
   'div',
@@ -128,6 +169,7 @@ const toolbar = h(
   highlightToggle.label,
   h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
   compareButton,
+  traceGroup,
   exportGroup,
 );
 
@@ -169,6 +211,8 @@ const panel = new SidePanel(
   {
     reveal: (id) => revealElement(id),
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
+    revealTrace: (target) => revealTraceTarget(target),
+    clearDescription: () => vscode.postMessage({ type: 'clearDescription' }),
   },
   // A hidden webview is rebuilt when its editor tab is shown again: start on
   // the tab it had (the state is per editor tab), else on Details.
@@ -176,6 +220,9 @@ const panel = new SidePanel(
 );
 
 const root = document.getElementById('root')!;
+// The diagram's focus frame is for keyboard users only: a click focuses the diagram too, and must not frame it.
+document.addEventListener('keydown', () => (document.documentElement.dataset.input = 'keyboard'), true);
+document.addEventListener('pointerdown', () => (document.documentElement.dataset.input = 'pointer'), true);
 root.append(toolbar, crumbs, banner, h('div', { class: 'main' }, stage, panel.element));
 
 // ---- Viewer -------------------------------------------------------------
@@ -186,6 +233,8 @@ let current: RenderMessage | undefined;
 let importGeneration = 0;
 /** The view and selection of each level above the shown one, by path key. */
 const levelStates = new Map<string, LevelState>();
+/** A trace row asked for an element on another level: select it once that level is drawn. */
+let pendingReveal: { id: string; path: string[] } | undefined;
 
 function createViewer(): NavigatedViewer {
   const style = getComputedStyle(document.body);
@@ -204,9 +253,18 @@ function createViewer(): NavigatedViewer {
   keepImportedRoot(v);
   const eventBus = v.get<EventBus>('eventBus');
   eventBus.on('element.click', (e) => {
-    const el = e.element;
+    // An external label stands for its element (a gateway's or an event's name).
+    const el = e.element?.labelTarget ?? e.element;
+    if (el && e.element?.labelTarget) v.get<Selection>('selection').select(el);
     // Clicking the pool or empty canvas shows the process details.
     panel.select(el && el.type !== 'bpmn:Participant' && el.type !== 'bpmn:Process' ? el.id : undefined);
+  });
+  // The one way the selection is drawn: every select (a click, a Changes or Trace row, the
+  // selection kept over a re-render or brought back after a drill-down) goes through here.
+  eventBus.on('selection.changed', (e) => {
+    const c = v.get<Canvas>('canvas');
+    for (const el of e.oldSelection ?? []) for (const marker of SELECTION_MARKERS) c.removeMarker(el, marker);
+    for (const el of e.newSelection ?? []) for (const marker of selectionMarkers(el)) c.addMarker(el, marker);
   });
   // Double-clicking a call opens what it calls, like the "Open diagram" button.
   eventBus.on('element.dblclick', (e) => {
@@ -252,6 +310,7 @@ async function render(msg: RenderMessage): Promise<void> {
   lanesToggle.input.checked = !msg.options.hideEmptyLanes;
   highlightToggle.input.checked = msg.options.highlightChanges;
   setControlsEnabled(true);
+  showTraceState(msg);
 
   // Any failure below must end on the error screen, never on "Loading…".
   try {
@@ -279,6 +338,12 @@ async function render(msg: RenderMessage): Promise<void> {
     if (kept) viewer.get<Selection>('selection').select(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
+    // A description was just picked: show its check.
+    if (msg.showTrace === true) panel.showTab('trace');
+    // The level a trace row opened: select its element (only for this render).
+    const reveal = pendingReveal;
+    pendingReveal = undefined;
+    if (reveal && pathKey(reveal.path) === pathKey(path)) revealElement(reveal.id);
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -292,6 +357,17 @@ async function render(msg: RenderMessage): Promise<void> {
 }
 
 const DIFF_MARKERS = { added: 'ls-diff-added', changed: 'ls-diff-changed' } as const;
+
+/** Markers of the selected element: ls-selected, with ls-selected-lane for a lane or pool (drawn plainer). */
+const SELECTION_MARKERS = ['ls-selected', 'ls-selected-lane', 'ls-selected-own-width'] as const;
+
+/** Types whose border is thicker than the selection stroke: the selection keeps their width. */
+const THICK_BORDER_TYPES = new Set(['bpmn:CallActivity', 'bpmn:EndEvent', 'bpmn:Transaction']);
+
+function selectionMarkers(el: DiagramElement): string[] {
+  if (el.type === 'bpmn:Lane' || el.type === 'bpmn:Participant') return ['ls-selected', 'ls-selected-lane'];
+  return THICK_BORDER_TYPES.has(el.type) ? ['ls-selected', 'ls-selected-own-width'] : ['ls-selected'];
+}
 
 /** Marks the added and changed elements of the comparison (this viewer only; exports draw in a viewer of their own). */
 function markChanges(msg: RenderMessage): void {
@@ -320,6 +396,35 @@ function revealElement(id: string): void {
   canvas().scrollToElement(element, 80);
   panel.select(shownId);
   panel.showTab('details');
+}
+
+/**
+ * A row of the Trace tab was clicked. Its element belongs to the chosen
+ * process, maybe inside sub-processes: draw that level first (from wherever
+ * the view is), then select it as a Changes row does.
+ */
+function revealTraceTarget(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void {
+  if (!current) return;
+  const want = [current.path[0].id, ...target.subProcessLevels];
+  if (pathKey(currentPath()) === pathKey(want)) {
+    revealElement(target.id);
+    return;
+  }
+  pendingReveal = { id: target.id, path: want };
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'openCallee', calleeId: want[want.length - 1], path: want.slice(0, -1) });
+}
+
+/** The Trace button: a badge of the missing items (as the tab counts them), the description in its tooltip. */
+function showTraceState(msg: RenderMessage): void {
+  const trace = msg.trace;
+  const title = traceTabTitle(trace);
+  const missing = /\((\d+)\)$/.exec(title)?.[1];
+  traceBadge.textContent = missing ?? '';
+  traceBadge.hidden = missing === undefined;
+  traceButton.title = trace ? `Show the check against ${trace.fileName}${missing ? ` (${missing} missing)` : ''}` : TRACE_IDLE_TOOLTIP;
+  traceButton.setAttribute('aria-label', traceButton.title);
+  traceClearItem.disabled = trace === undefined;
 }
 
 function showError(msg: ErrorMessage): void {
@@ -371,12 +476,13 @@ function showProcessChoices(msg: RenderMessage): void {
 }
 
 function setControlsEnabled(enabled: boolean): void {
-  for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, highlightToggle.input, compareButton, processSelect, backButton]) {
+  for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, highlightToggle.input, compareButton, traceButton, traceArrow, processSelect, backButton]) {
     control.disabled = !enabled;
   }
   // Export works on the drawn diagram only (not on the error screen), one image at a time.
   exportButton.disabled = !enabled || exporting;
-  if (exportButton.disabled) closeExportMenu(false);
+  if (exportButton.disabled) exportMenu.close(false);
+  if (!enabled) traceMenu.close(false);
   for (const crumb of crumbList.querySelectorAll('button')) crumb.disabled = !enabled;
 }
 
@@ -472,8 +578,10 @@ canvasHost.addEventListener('keydown', (e) => {
 // process it clears the selection.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !current || e.target instanceof HTMLSelectElement) return;
-  if (!exportMenu.hidden) {
-    closeExportMenu(true);
+  if (exportMenu.isOpen) {
+    exportMenu.close(true);
+  } else if (traceMenu.isOpen) {
+    traceMenu.close(true);
   } else if (currentPath().length > 1) {
     if (!backButton.disabled) goBack();
   } else {
@@ -499,52 +607,6 @@ new MutationObserver(() => {
 
 /** True while an image is drawn for the host. */
 let exporting = false;
-
-function openExportMenu(): void {
-  if (exportButton.disabled) return;
-  exportMenu.hidden = false;
-  exportButton.setAttribute('aria-expanded', 'true');
-  exportItems[0].focus();
-}
-
-function closeExportMenu(focusButton: boolean): void {
-  if (exportMenu.hidden) return;
-  exportMenu.hidden = true;
-  exportButton.setAttribute('aria-expanded', 'false');
-  if (focusButton) exportButton.focus();
-}
-
-exportButton.addEventListener('click', () => {
-  if (exportMenu.hidden) openExportMenu();
-  else closeExportMenu(false);
-});
-exportButton.addEventListener('keydown', (e) => {
-  if (e.key !== 'ArrowDown') return;
-  e.preventDefault();
-  openExportMenu();
-});
-exportMenu.addEventListener('keydown', (e) => {
-  const index = exportItems.indexOf(document.activeElement as HTMLButtonElement);
-  if (e.key === 'Escape') {
-    closeExportMenu(true);
-  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    const step = e.key === 'ArrowDown' ? 1 : -1;
-    exportItems[(index + step + exportItems.length) % exportItems.length].focus();
-  } else if (e.key === 'Home' || e.key === 'End') {
-    exportItems[e.key === 'Home' ? 0 : exportItems.length - 1].focus();
-  } else if (e.key === 'Tab') {
-    closeExportMenu(false);
-    return;
-  } else {
-    return;
-  }
-  // Escape here closes the menu only; it does not go up a level.
-  e.preventDefault();
-  e.stopPropagation();
-});
-document.addEventListener('pointerdown', (e) => {
-  if (!exportGroup.contains(e.target as Node)) closeExportMenu(false);
-});
 
 /** Draws the export BPMN the host sent as an image and sends it back. */
 async function exportImage(msg: ExportSourceMessage): Promise<void> {
@@ -582,6 +644,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   if (msg?.type === 'render') {
     watchdog.answered();
     void render(msg);
+    // The label of the Trace menu's description item, ready before the menu opens.
+    vscode.postMessage({ type: 'descriptionStatus' });
   } else if (msg?.type === 'error') {
     watchdog.answered();
     hideBanner();
@@ -589,6 +653,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   } else if (msg?.type === 'refreshError') {
     watchdog.answered();
     showBanner(msg);
+  } else if (msg?.type === 'descriptionStatus' && typeof msg.exists === 'boolean') {
+    showDescriptionStatus(msg);
   } else if (msg?.type === 'exportSource' && (msg.format === 'svg' || msg.format === 'png')) {
     void exportImage(msg);
   }

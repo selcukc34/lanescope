@@ -63,6 +63,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show the code of script tasks in the details panel. When off, script text is not sent to the diagram view at all."
+        },
+        "lanescope.trace.autoDetectDescription": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Check a diagram against `<name>-description.md` or `<name>.md` when it is next to the opened file. The Trace tab lists the result; nothing is written."
         }
       }
     },
@@ -82,6 +87,18 @@
       {
         "command": "lanescope.clearComparison",
         "title": "Lanescope: Clear Comparison"
+      },
+      {
+        "command": "lanescope.checkDescription",
+        "title": "Lanescope: Check Against Description…"
+      },
+      {
+        "command": "lanescope.clearDescription",
+        "title": "Lanescope: Clear Description Check"
+      },
+      {
+        "command": "lanescope.newDescription",
+        "title": "Lanescope: New or Open Process Description"
       }
     ],
     "menus": {
@@ -107,6 +124,18 @@
         {
           "command": "lanescope.clearComparison",
           "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.checkDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.clearDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.newDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer"
         }
       ],
       "editor/title": [
@@ -114,6 +143,16 @@
           "command": "lanescope.compare",
           "when": "activeCustomEditorId == lanescope.processViewer",
           "group": "1_lanescope@1"
+        },
+        {
+          "command": "lanescope.checkDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer",
+          "group": "1_lanescope@2"
+        },
+        {
+          "command": "lanescope.newDescription",
+          "when": "activeCustomEditorId == lanescope.processViewer",
+          "group": "1_lanescope@3"
         }
       ]
     }

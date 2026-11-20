@@ -29,3 +29,14 @@ export function isWatchedChange(openedPath: string, changedPath: string): boolea
     path.extname(openedPath).toLowerCase() === '.bpmn' && path.extname(changedPath).toLowerCase() === '.xsd'
   );
 }
+
+/**
+ * Descriptions that belong to an opened file, in the order they are tried:
+ * <base>-description.md, then <base>.md, next to it (base: the file name
+ * without its extension).
+ */
+export function descriptionCandidates(openedPath: string): string[] {
+  const dir = path.dirname(openedPath);
+  const base = path.basename(openedPath, path.extname(openedPath));
+  return [path.join(dir, `${base}-description.md`), path.join(dir, `${base}.md`)];
+}
