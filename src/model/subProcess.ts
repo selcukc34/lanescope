@@ -42,8 +42,9 @@ export function childCounts(process: Process): Map<string, number> {
  * inside it, at any depth, and the flows between them. Its direct children
  * are top-level nodes of the diagram; deeper nodes keep their parents, so a
  * nested sub-process is drawn collapsed and opens as one more level. A
- * boundary event comes with the node it is attached to. No lanes: one pool,
- * named after the sub-process. Undefined when there is no such sub-process
+ * boundary event comes with the node it is attached to. One pool, named
+ * after the sub-process, with the sub-process's own lanes when it has them
+ * (FlowNode.lanes), else none. Undefined when there is no such sub-process
  * or it holds no node.
  */
 export function subProcessDiagram(process: Process, levelId: string): Process | undefined {
@@ -74,16 +75,21 @@ export function subProcessDiagram(process: Process, levelId: string): Process | 
   if (inside.size === 0) return undefined;
 
   const original = new Map(process.nodes.map((n) => [n.id, n]));
+  const lanes = (sub.lanes ?? []).map((l) => ({ ...l, nodeIds: [...l.nodeIds], ...(l.bounds ? { bounds: { ...l.bounds } } : {}) }));
+  const laneIds = new Set(lanes.map((l) => l.id));
   const nodes: FlowNode[] = [];
   for (const n of process.nodes) {
     if (!inside.has(n.id)) continue;
     const copy: FlowNode = { ...n };
-    // There are no lanes at this level.
-    delete copy.laneId;
     const host = n.attachedToId !== undefined && n.parentId === undefined ? original.get(n.attachedToId) : undefined;
     const parent = host ? host.parentId : n.parentId;
-    if (parent === sub.id || parent === undefined) delete copy.parentId;
-    else copy.parentId = parent;
+    if (parent === sub.id || parent === undefined) {
+      delete copy.parentId;
+      // Drawn at this level: only the sub-process's own lanes apply.
+      if (copy.laneId !== undefined && !laneIds.has(copy.laneId)) delete copy.laneId;
+    } else {
+      copy.parentId = parent;
+    }
     nodes.push(copy);
   }
   const flows: Flow[] = process.flows.filter((f) => inside.has(f.sourceId) && inside.has(f.targetId)).map((f) => ({ ...f }));
@@ -93,7 +99,7 @@ export function subProcessDiagram(process: Process, levelId: string): Process | 
     ...(sub.originalId !== undefined ? { originalId: sub.originalId } : {}),
     name: sub.name,
     documentation: sub.documentation ?? '',
-    lanes: [],
+    lanes,
     nodes,
     flows,
     // The kind of diagram it is part of: the comparison and the views read it.

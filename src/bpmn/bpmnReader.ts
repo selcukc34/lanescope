@@ -152,27 +152,12 @@ function mapProcess(
   const flows: Flow[] = [];
   collectElements(process, undefined, nodes, flows, raw, warnings);
 
-  const lanes: Lane[] = [];
-  const collectLanes = (laneSets: unknown) => {
-    for (const laneSet of list(laneSets)) {
-      for (const lane of list(laneSet.lanes)) {
-        const id = str(lane.id);
-        const rawRefs = raw.laneRefs.get(id);
-        const nodeIds = rawRefs ?? list(lane.flowNodeRef).map((n) => str(n.id));
-        lanes.push({ id, name: str(lane.name), nodeIds });
-        if (lane.childLaneSet) collectLanes([lane.childLaneSet]);
-      }
-    }
-  };
-  collectLanes(process.laneSets);
-
-  // Later (nested) lanes win, so a node ends up in its innermost lane.
+  const lanes = readLanes(process.laneSets, raw);
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  for (const lane of lanes) {
-    for (const id of lane.nodeIds) {
-      const node = nodeById.get(id);
-      if (node) node.laneId = lane.id;
-    }
+  assignLanes(lanes, nodeById);
+  // A sub-process's own lanes hold the nodes directly inside it.
+  for (const node of nodes) {
+    if (node.lanes) assignLanes(node.lanes, nodeById, node.id);
   }
   for (const node of nodes) {
     const b = bounds.get(node.id);
@@ -189,6 +174,38 @@ function mapProcess(
   };
 }
 
+/** The lanes of laneSets, nested ones after their parent. */
+function readLanes(laneSets: unknown, raw: RawScan): Lane[] {
+  const lanes: Lane[] = [];
+  const collect = (sets: unknown) => {
+    for (const laneSet of list(sets)) {
+      for (const lane of list(laneSet.lanes)) {
+        const id = str(lane.id);
+        const rawRefs = raw.laneRefs.get(id);
+        const nodeIds = rawRefs ?? list(lane.flowNodeRef).map((n) => str(n.id));
+        lanes.push({ id, name: str(lane.name), nodeIds });
+        if (lane.childLaneSet) collect([lane.childLaneSet]);
+      }
+    }
+  };
+  collect(laneSets);
+  return lanes;
+}
+
+/**
+ * Puts the nodes the lanes name in their lane; with `parentId`, only the
+ * nodes directly inside that sub-process. Later (nested) lanes win, so a
+ * node ends up in its innermost lane.
+ */
+function assignLanes(lanes: Lane[], nodeById: Map<string, FlowNode>, parentId?: string): void {
+  for (const lane of lanes) {
+    for (const id of lane.nodeIds) {
+      const node = nodeById.get(id);
+      if (node && (parentId === undefined || node.parentId === parentId)) node.laneId = lane.id;
+    }
+  }
+}
+
 function collectElements(
   container: ModdleElement,
   parentId: string | undefined,
@@ -201,8 +218,11 @@ function collectElements(
     if (el.$type === 'bpmn:SequenceFlow') {
       flows.push(mapFlow(el, raw));
     } else if (el.$instanceOf('bpmn:FlowNode')) {
-      nodes.push(mapNode(el, parentId));
+      const node = mapNode(el, parentId);
+      nodes.push(node);
       if (el.$instanceOf('bpmn:SubProcess')) {
+        const lanes = readLanes(el.laneSets, raw);
+        if (lanes.length > 0) node.lanes = lanes;
         collectElements(el, str(el.id), nodes, flows, raw, warnings);
       }
     }

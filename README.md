@@ -89,8 +89,8 @@ In a service diagram, clicking the empty canvas shows the service's kind (**Serv
 A sub-process (and an event sub-process) is drawn collapsed in its process. Its inside opens as a diagram of its own, one level below, in the same way as a called service, in Bob output and in `.twx` exports.
 
 - Select the sub-process and click **Open sub-process** in the details panel, or double-click it in the diagram. The details panel shows how many nodes it contains (**Contains**: the nodes drawn when it is opened). A sub-process without nodes shows **Empty sub-process** and does not open.
-- The inside is drawn in one pool named after the sub-process, without lanes. A sub-process inside it is drawn collapsed again and opens as one more level. Boundary events come with the node they are attached to.
-- In a `.twx` export the nodes keep the positions of the BAW editor's sub-process diagram, when the export holds it; otherwise, and for Bob output, the inside is laid out automatically.
+- The inside is drawn in one pool named after the sub-process, with the sub-process's own lanes: in BAW a sub-process has lanes of its own, independent of the process lanes (by default one lane, **All Users**); in Bob output, a `bpmn:laneSet` inside the `bpmn:subProcess`. Without them it is drawn without lanes. **Show empty lanes** applies as in the process. A sub-process inside it is drawn collapsed again and opens as one more level. Boundary events come with the node they are attached to.
+- In a `.twx` export the lanes (names, order, heights) and the node positions are those of the BAW editor's sub-process diagram, when the export holds it; otherwise, and for Bob output, the inside is laid out automatically. The details panel shows the lane of the sub-process's own diagram.
 - The breadcrumb shows the path, e.g. **Main Process › Sub1**, with the kind **Sub-process** or **Event sub-process**; going back, Escape, zoom and selection work as for called services.
 - The Warnings tab of a sub-process level lists no validation results of its own: the rules already check the inside of every sub-process when they run on the process.
 
@@ -153,7 +153,7 @@ How elements are paired: by id first (Bob keeps its ids when it generates a proc
 - Positions, sizes, label positions and ids are not compared: a different layout or a new id alone is not a change.
 - Script code is never shown: a changed script is listed as "Script changed", whatever `lanescope.showScripts` says. Changed mappings list the parameter names only, not the mapped values. Long documentation and conditions are cut to 80 characters.
 - Only processes are compared. Inside an opened service flow or linked process, the Changes tab says so.
-- Sub-processes are part of their process. A collapsed sub-process with added, changed or removed elements inside it is marked changed, and its row says **Inner changes: N**. Inside an opened sub-process the Changes tab lists the comparison of the process, and the elements drawn there are marked. A row of an element that is not drawn at the shown level selects the sub-process that holds it.
+- Sub-processes are part of their process. The lanes of a sub-process's own diagram pair like the process lanes (by id, else by name) within each pair of sub-processes. A collapsed sub-process with added, changed or removed elements inside it (its lanes included) is marked changed, and its row says **Inner changes: N**. Inside an opened sub-process the Changes tab lists the comparison of the process, and the elements drawn there are marked. A row of an element that is not drawn at the shown level selects the sub-process that holds it.
 - Exports never hold the change marks.
 
 ## Settings
@@ -186,7 +186,7 @@ The **Warnings** tab lists issues found in the opened process. The viewer only r
 | `gateway-without-outgoing-flow` | A gateway of any type has incoming flows but no outgoing flow. |
 | `disconnected-node` | A node has no incoming and no outgoing sequence flow. Boundary events and event sub-processes are not checked. |
 | `no-path-to-end` | No chain of sequence flows leads to an end event. Reported where the flow gets stuck, not on every node before it: at a dead end (a node without outgoing flow), or once per loop without a way out, on the node where the loop is entered. Nodes inside a sub-process must reach an end event of that sub-process; a sub-process without end events is not checked. A process without any end event gets a single warning. Nodes already reported by the two rules above, boundary events and event sub-processes are not reported again. |
-| `empty-lane` | A lane holds no nodes: "Lane &lt;name&gt; has no activities". |
+| `empty-lane` | A lane holds no nodes: "Lane &lt;name&gt; has no activities". The lanes of a sub-process's own diagram are checked too: `Lane "<name>" in sub-process "<sub-process>" has no activities.` |
 | `activity-without-documentation` | A task, script task, user task, service task, call activity or sub-process has empty documentation. Events and gateways are not checked. One line per process: the number of activities and the first eight names. |
 
 A Bob process imported into BAW 8.6.6 and exported again shows `gateway-unconditioned-flow` warnings, because BAW drops the gateway conditions on import.
@@ -196,7 +196,7 @@ A Bob process imported into BAW 8.6.6 and exported again shows `gateway-uncondit
 - Of the toolkits packed in a `.twx` export (`toolkits/*.zip`) only `package.xml` is read, and only to name the coach views that controls use; their services are not read. The process details list the toolkits the app depends on.
 - **Inside &lt;service&gt;** in the details panel lists one level deep; to go further, open the service as a diagram.
 - Services of toolkits cannot be opened. Coaches are listed as a control table, not drawn.
-- Sub-processes are not expanded in place: their inside opens as a level of its own (see [Opening sub-processes](#opening-sub-processes)). In a `.twx` export, the lane of the BAW sub-process diagram is not drawn.
+- Sub-processes are not expanded in place: their inside opens as a level of its own (see [Opening sub-processes](#opening-sub-processes)).
 - Bob output is always laid out automatically; any layout made in another tool is not kept.
 - Size limits protect against oversized archives: a Bob `.zip` may hold at most 500 entries and 50 MB uncompressed; a `.twx` may be at most 512 MB, with at most 64 MB per entry.
 - The viewer cannot edit or save diagrams.

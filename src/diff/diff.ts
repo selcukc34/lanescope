@@ -20,7 +20,10 @@
 // sub-processes, unknown elements), gateways, start events, end events and
 // intermediate events. A change of kind within a family is a change ("Type").
 // Flows pair by identity, else by paired source and target when one flow on
-// each side joins them. Lanes pair by identity, else by a unique name.
+// each side joins them. Lanes pair by identity, else by a unique name. The
+// lanes of a sub-process's own diagram pair the same way, within each pair
+// of sub-processes; nodes are paired again with them, so pass c works for
+// the nodes inside too.
 //
 // Compared: names, kinds, lanes, documentation, performers, called elements,
 // inputs and outputs, user task and timer settings, conditions and default
@@ -28,8 +31,8 @@
 // sizes, ports and label positions, and the ids themselves.
 //
 // Sub-processes. A sub-process with added, changed or removed elements inside
-// it (at any depth) is marked changed, and its entry says "Inner changes: N"
-// (N entries inside it). An added sub-process gets no such line: everything
+// it (at any depth), its own lanes included, is marked changed, and its
+// entry says "Inner changes: N" (N entries inside it). An added sub-process gets no such line: everything
 // in it is new. The elements inside a sub-process list the sub-processes
 // that hold them (`enclosing`), so a view that draws the sub-process
 // collapsed can point at it.
@@ -117,8 +120,19 @@ export function matchProcess(base: ProcessPackage, process: Process, current: Pr
 
 /** Compares `current` with `base`, and the data types of their packages. */
 export function diffProcess(base: Process, current: Process, baseTypes: DataType[], currentTypes: DataType[]): ProcessDiff {
-  const lanes = matchLanes(base.lanes, current.lanes);
-  const { nodes, counts: nodeMatches } = matchNodes(base, current, lanes);
+  const processLanes = matchLanes(base.lanes, current.lanes);
+  let matched = matchNodes(base, current, processLanes);
+  let lanes = withSubProcessLanes(processLanes, base, current, matched.nodes);
+  // Sub-process lanes pair once their sub-processes do; pairing the nodes again with them can pair more.
+  for (let round = 0; round < MAX_LANE_ROUNDS && lanes.toBase.size > processLanes.toBase.size; round++) {
+    const again = matchNodes(base, current, lanes);
+    const more = withSubProcessLanes(processLanes, base, current, again.nodes);
+    const done = again.nodes.toBase.size === matched.nodes.toBase.size && more.toBase.size === lanes.toBase.size;
+    matched = again;
+    lanes = more;
+    if (done) break;
+  }
+  const { nodes, counts: nodeMatches } = matched;
   const flows = matchFlows(base.flows, current.flows, nodes);
 
   const added: DiffEntry[] = [];
@@ -132,8 +146,8 @@ export function diffProcess(base: Process, current: Process, baseTypes: DataType
 
   const baseNodes = new Map(base.nodes.map((n) => [n.id, n]));
   const currentNodes = new Map(current.nodes.map((n) => [n.id, n]));
-  const baseLanes = new Map(base.lanes.map((l) => [l.id, l]));
-  const currentLanes = new Map(current.lanes.map((l) => [l.id, l]));
+  const baseLanes = new Map([...base.lanes, ...base.nodes.flatMap((n) => n.lanes ?? [])].map((l) => [l.id, l]));
+  const currentLanes = new Map([...current.lanes, ...current.nodes.flatMap((n) => n.lanes ?? [])].map((l) => [l.id, l]));
   const ctx: Context = { nodes, lanes, baseNodes, currentNodes, baseLanes, currentLanes };
 
   // Nodes, flows, lanes: in model order (removed: in the base's order).
@@ -149,6 +163,14 @@ export function diffProcess(base: Process, current: Process, baseTypes: DataType
     (b, c) => compareFlows(b, c, ctx),
   );
   diffList(out, 'lane', base.lanes, current.lanes, lanes, (l) => laneLabel(l), compareLanes);
+  // The lanes of each pair of sub-processes; those of an added or removed sub-process are not listed.
+  for (const c of current.nodes) {
+    const baseId = c.kind === 'subProcess' ? nodes.toBase.get(c.id) : undefined;
+    const b = baseId !== undefined ? baseNodes.get(baseId) : undefined;
+    if (!b || (!b.lanes && !c.lanes)) continue;
+    const where = (side: 'base' | 'current') => ` in sub-process ${quote((side === 'base' ? b : c).name.trim() || (side === 'base' ? b : c).id)}`;
+    diffList(out, 'lane', b.lanes ?? [], c.lanes ?? [], lanes, (l, side) => laneLabel(l) + where(side), compareLanes);
+  }
   const marks = out.marks;
   const enclosing = rollUpSubProcesses(out, base, current, nodes);
 
@@ -177,7 +199,8 @@ export function diffProcess(base: Process, current: Process, baseTypes: DataType
  */
 function rollUpSubProcesses(out: Lists, base: Process, current: Process, nodes: Matching): Record<string, string[]> {
   const enclosing: Record<string, string[]> = {};
-  if (!current.nodes.some((n) => n.parentId !== undefined) && !base.nodes.some((n) => n.parentId !== undefined)) return enclosing;
+  const nested = (p: Process) => p.nodes.some((n) => n.parentId !== undefined || n.lanes !== undefined);
+  if (!nested(current) && !nested(base)) return enclosing;
 
   const currentParent = new Map(current.nodes.map((n) => [n.id, n.parentId]));
   const baseParent = new Map(base.nodes.map((n) => [n.id, n.parentId]));
@@ -198,15 +221,36 @@ function rollUpSubProcesses(out: Lists, base: Process, current: Process, nodes: 
     for (const id of subIds) inner.set(id, (inner.get(id) ?? 0) + 1);
   };
 
+  // A lane of a sub-process's own diagram is inside that sub-process.
+  const laneOwners = (p: Process) => new Map(p.nodes.flatMap((n) => (n.lanes ?? []).map((l) => [l.id, n.id] as const)));
+  const currentLaneOwner = laneOwners(current);
+  const baseLaneOwner = laneOwners(base);
+  const laneChain = (owner: string | undefined, parents: Map<string, string | undefined>) =>
+    owner === undefined ? [] : [owner, ...around(owner, parents).filter((id) => id !== owner)];
+
   for (const e of [...out.added, ...out.changed]) {
-    if ((e.elementType !== 'node' && e.elementType !== 'flow') || e.currentId === undefined) continue;
+    if (e.currentId === undefined) continue;
+    if (e.elementType === 'lane') {
+      const chain = laneChain(currentLaneOwner.get(e.currentId), currentParent);
+      if (chain.length > 0) {
+        enclosing[e.currentId] = chain;
+        count(chain);
+      }
+      continue;
+    }
+    if (e.elementType !== 'node' && e.elementType !== 'flow') continue;
     const chain = around(e.elementType === 'node' ? e.currentId : currentSource.get(e.currentId), currentParent);
     if (chain.length === 0) continue;
     enclosing[e.currentId] = chain;
     count(chain);
   }
   for (const e of out.removed) {
-    if ((e.elementType !== 'node' && e.elementType !== 'flow') || e.baseId === undefined) continue;
+    if (e.baseId === undefined) continue;
+    if (e.elementType === 'lane') {
+      count(laneChain(baseLaneOwner.get(e.baseId), baseParent).map((id) => nodes.toCurrent.get(id)).filter((id): id is string => id !== undefined));
+      continue;
+    }
+    if (e.elementType !== 'node' && e.elementType !== 'flow') continue;
     const chain = around(e.elementType === 'node' ? e.baseId : baseSource.get(e.baseId), baseParent);
     count(chain.map((id) => nodes.toCurrent.get(id)).filter((id): id is string => id !== undefined));
   }
@@ -320,6 +364,24 @@ function matchLanes(base: Lane[], current: Lane[]): Matching {
     (l) => l.name.trim() || undefined,
     (l) => l.name.trim() || undefined,
   );
+  return m;
+}
+
+/** Most times nodes are paired again with the lanes of newly paired sub-processes; a guard. */
+const MAX_LANE_ROUNDS = 8;
+
+/** The pairs of `processLanes` and of the own lanes of every pair of sub-processes. */
+function withSubProcessLanes(processLanes: Matching, base: Process, current: Process, nodes: Matching): Matching {
+  const m = new Matching();
+  for (const [b, c] of processLanes.toCurrent) m.add(b, c);
+  const currentById = new Map(current.nodes.map((n) => [n.id, n]));
+  for (const b of base.nodes) {
+    if (!b.lanes) continue;
+    const cId = nodes.toCurrent.get(b.id);
+    const c = cId !== undefined ? currentById.get(cId) : undefined;
+    if (!c?.lanes) continue;
+    for (const [bl, cl] of matchLanes(b.lanes, c.lanes).toCurrent) m.add(bl, cl);
+  }
   return m;
 }
 

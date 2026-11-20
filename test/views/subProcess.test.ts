@@ -7,12 +7,13 @@ import { readProcessPackage } from '../../src/bpmn/bpmnReader';
 import { diffProcess } from '../../src/diff/diff';
 import type { Flow, FlowNode, Process, ProcessPackage } from '../../src/model/model';
 import { childCounts, findSubProcess, subProcessDiagram, subProcessLevelId } from '../../src/model/subProcess';
-import type { HostMessage, NodeDetails, RenderMessage } from '../../src/views/protocol';
+import type { HostMessage, LaneDetails, NodeDetails, RenderMessage } from '../../src/views/protocol';
+import { validateProcess } from '../../src/validate/validate';
 import { PROCESSES_ONLY_NOTE, ViewerSession } from '../../src/views/viewerSession';
 import { readTwxPackage } from '../../src/twx/twxImport';
 import { changeGroups } from '../../webview/panelText';
 import { hasLocalTwx, localTwx } from '../localFixtures';
-import { CHECK_STOCK_ID, ON_ERROR_ID, syntheticTwxPackage } from '../syntheticTwx';
+import { CHECK_STOCK_ID, ON_ERROR_ID, SUB_LANE_IDS, syntheticTwxPackage } from '../syntheticTwx';
 
 const node = (id: string, kind: FlowNode['kind'], extra: Partial<FlowNode> = {}): FlowNode => ({
   id,
@@ -390,6 +391,163 @@ describe('synthetic TWX: sub-processes and event sub-processes', () => {
   });
 });
 
+describe('lanes of a sub-process', () => {
+  const levelOf = (id: string) => `sub:${id}`;
+  const lanesOf = (r: RenderMessage) => Object.values(r.elements).filter((e): e is LaneDetails => e.kind === 'lane').map((l) => [l.name, l.nodeCount]);
+  const laneOfNode = (r: RenderMessage, name: string) => named(r, name).lane;
+
+  it('TWX: reads the lanes of the sub-process diagram object, their order and heights, and puts the nodes in them', async () => {
+    const pkg = await syntheticTwxPackage({ subProcess: true });
+    const p = pkg.processes[0];
+    const check = findSubProcess(p, levelOf(CHECK_STOCK_ID))!;
+    expect(check.lanes!.map((l) => [l.originalId, l.name, l.bounds?.y, l.bounds?.height])).toEqual([
+      [SUB_LANE_IDS.warehouse, 'Warehouse', 0, 150],
+      [SUB_LANE_IDS.shipping, 'Shipping', 150, 120],
+    ]);
+    const d = subProcessDiagram(p, levelOf(CHECK_STOCK_ID))!;
+    const laneName = (nodeName: string) => d.lanes.find((l) => l.id === d.nodes.find((n) => n.name === nodeName)!.laneId)?.name;
+    expect(['Check Start', 'Count Items', 'Timeout', 'Reserve Items', 'Check End'].map(laneName)).toEqual(['Warehouse', 'Warehouse', 'Warehouse', 'Shipping', 'Shipping']);
+    // Locations are relative to the lane: the lane top is added, as for the process.
+    expect(d.nodes.find((n) => n.name === 'Reserve Items')!.bounds).toEqual({ x: 320, y: 175, width: 95, height: 70 });
+    expect(d.nodes.find((n) => n.name === 'Check End')!.bounds).toEqual({ x: 500, y: 198, width: 24, height: 24 });
+    // The process keeps its own lanes; the nodes it draws keep theirs.
+    expect(p.lanes.map((l) => l.name)).toEqual(['Customer', 'System']);
+    expect(p.nodes.filter((n) => n.parentId === undefined).every((n) => p.lanes.some((l) => l.id === n.laneId))).toBe(true);
+    // Reserve Items has no diagram object: no lanes inside it.
+    expect(subProcessDiagram(d, subProcessLevelId(d.nodes.find((n) => n.name === 'Reserve Items')!))!.lanes).toEqual([]);
+  });
+
+  it('TWX: draws the lanes at the sub-process level with BAW heights; the process is drawn as before', async () => {
+    const { s, last, open } = session(() => syntheticTwxPackage({ subProcess: true }), 'synthetic.twx');
+    await s.handleMessage({ type: 'ready' });
+    const root = last();
+    expect(lanesOf(root)).toEqual([
+      ['Customer', 2],
+      ['System', 5],
+    ]);
+    const check = await open(levelOf(CHECK_STOCK_ID));
+    expect(lanesOf(check)).toEqual([
+      ['Warehouse', 3],
+      ['Shipping', 2],
+    ]);
+    // Details show the lane of the sub-process's own diagram.
+    expect(laneOfNode(check, 'Count Items')).toBe('Warehouse');
+    expect(laneOfNode(check, 'Check End')).toBe('Shipping');
+    expect(check.warnings).toEqual([]);
+    expect(check.xml).toMatch(/<bpmn:lane id="[^"]+" name="Warehouse">/);
+  });
+
+  it('TWX: an empty lane of a sub-process is drawn by default, follows Show empty lanes, and is reported in the process', async () => {
+    const { s, last, open } = session(() => syntheticTwxPackage({ subProcess: true }), 'synthetic.twx');
+    await s.handleMessage({ type: 'ready' });
+    expect(last().warnings).toContain('Lane "Escalation" in sub-process "On Error" has no activities.');
+    const onError = await open(levelOf(ON_ERROR_ID));
+    expect(lanesOf(onError)).toEqual([
+      ['All Users', 2],
+      ['Escalation', 0],
+    ]);
+    // The rules do not run again at the sub-process level.
+    expect(onError.warnings).toEqual([]);
+    await s.handleMessage({ type: 'setOptions', options: { ...onError.options, hideEmptyLanes: true } });
+    expect(lanesOf(last())).toEqual([['All Users', 2]]);
+  });
+
+  it('empty-lane names the sub-process; the process lanes keep their message', () => {
+    const p = nested();
+    p.lanes.push({ id: 'L2', name: 'Spare', nodeIds: [] });
+    const S = p.nodes.find((n) => n.id === 'S')!;
+    S.lanes = [
+      { id: 'SL1', name: 'Inner', nodeIds: ['a'] },
+      { id: 'SL2', name: 'Unused', nodeIds: [] },
+    ];
+    p.nodes.find((n) => n.id === 'a')!.laneId = 'SL1';
+    expect(validateProcess(p).filter((i) => i.ruleId === 'empty-lane').map((i) => i.message)).toEqual([
+      'Lane Spare has no activities',
+      'Lane "Unused" in sub-process "S" has no activities.',
+    ]);
+  });
+
+  const BOB_LANES = BOB_BPMN.replace(
+    '<bpmn:subProcess id="prepare" name="Prepare">',
+    `<bpmn:subProcess id="prepare" name="Prepare">
+      <bpmn:laneSet id="prepareLanes">
+        <bpmn:lane id="pickers" name="Pickers"><bpmn:flowNodeRef>prepStart</bpmn:flowNodeRef><bpmn:flowNodeRef>pick</bpmn:flowNodeRef></bpmn:lane>
+        <bpmn:lane id="packers" name="Packers"><bpmn:flowNodeRef>pack</bpmn:flowNodeRef><bpmn:flowNodeRef>prepEnd</bpmn:flowNodeRef></bpmn:lane>
+      </bpmn:laneSet>`,
+  );
+
+  it('Bob: reads a laneSet inside a bpmn:subProcess and draws its lanes', async () => {
+    const pkg = await bobPackage(BOB_LANES);
+    const prepare = pkg.processes[0].nodes.find((n) => n.id === 'prepare')!;
+    expect(prepare.lanes!.map((l) => [l.id, l.name, l.nodeIds])).toEqual([
+      ['pickers', 'Pickers', ['prepStart', 'pick']],
+      ['packers', 'Packers', ['pack', 'prepEnd']],
+    ]);
+    expect(pkg.processes[0].lanes).toEqual([]);
+    const { s, open } = session(async () => pkg);
+    await s.handleMessage({ type: 'ready' });
+    const level = await open('sub:prepare');
+    expect(lanesOf(level)).toEqual([
+      ['Pickers', 2],
+      ['Packers', 2],
+    ]);
+    expect(laneOfNode(level, 'Pack')).toBe('Packers');
+    // Pack has no laneSet: no lanes one level further down.
+    expect(lanesOf(await open('sub:pack'))).toEqual([]);
+  });
+
+  it('Bob: a sub-process without a laneSet has no lanes', async () => {
+    const pkg = await bobPackage();
+    expect(pkg.processes[0].nodes.find((n) => n.id === 'prepare')!.lanes).toBeUndefined();
+  });
+
+  it('diff: pairs sub-process lanes by id, then by name; a renamed lane counts as an inner change', async () => {
+    const base = nested();
+    base.nodes.find((n) => n.id === 'S')!.lanes = [
+      { id: 'SL1', name: 'Inner', nodeIds: ['a'] },
+      { id: 'SL2', name: 'Other', nodeIds: ['b'] },
+    ];
+    const current = structuredClone(base);
+    const lanes = current.nodes.find((n) => n.id === 'S')!.lanes!;
+    lanes[0].name = 'Inner renamed';
+    // Another id, the same name: paired by name, nothing changed.
+    lanes[1].id = 'SL2-new';
+    current.nodes.find((n) => n.id === 'b')!.laneId = 'SL2-new';
+    base.nodes.find((n) => n.id === 'b')!.laneId = 'SL2';
+    const d = diffProcess(base, current, [], []);
+    expect(d.changed.map((e) => [e.label, e.changes])).toEqual([
+      ['Sub-process "S"', ['Inner changes: 1']],
+      ['Lane "Inner renamed" in sub-process "S"', ['Name: "Inner" → "Inner renamed"']],
+    ]);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.marks).toEqual({ S: 'changed', SL1: 'changed' });
+    expect(d.enclosing).toEqual({ SL1: ['S'] });
+  });
+
+  it('diff: a lane renamed in a TWX sub-process is marked at the sub-process level', async () => {
+    let renamed = false;
+    const load = async () => {
+      const pkg = await syntheticTwxPackage({ subProcess: true });
+      if (renamed) findSubProcess(pkg.processes[0], levelOf(CHECK_STOCK_ID))!.lanes![1].name = 'Dispatch';
+      return pkg;
+    };
+    const { s, last, open } = session(load, 'synthetic.twx');
+    await s.handleMessage({ type: 'ready' });
+    renamed = true;
+    await s.reload();
+    const root = last();
+    expect(root.diff!.changed.map((e) => [e.label, e.changes])).toEqual([
+      ['Sub-process "Check Stock"', ['Inner changes: 1']],
+      ['Lane "Dispatch" in sub-process "Check Stock"', ['Name: "Shipping" → "Dispatch"']],
+    ]);
+    const laneId = root.diff!.changed[1].currentId!;
+    const check = await open(levelOf(CHECK_STOCK_ID));
+    expect(check.elements[laneId]).toMatchObject({ kind: 'lane', name: 'Dispatch' });
+    expect(check.diff!.marks[laneId]).toBe('changed');
+  });
+});
+
 describe.skipIf(!hasLocalTwx('activities'))('local export: activities.twx', () => {
   it('opens Sub1 and the event sub-process with BAW positions', async () => {
     const { s, last, open } = session(() => readTwxPackage(localTwx('activities')), 'activities.twx');
@@ -404,12 +562,15 @@ describe.skipIf(!hasLocalTwx('activities'))('local export: activities.twx', () =
     const inside = await open(sub1.openCallee!);
     expect(inside.path.map((l) => l.name)).toEqual(['MyFirstProcess', 'Sub1']);
     expect(Object.values(inside.elements).filter((e) => e.kind === 'node')).toHaveLength(4);
+    // The lane of BAW's sub-process diagram, with every node in it.
+    expect(Object.values(inside.elements).filter((e) => e.kind === 'lane').map((l) => [l.name, (l as LaneDetails).nodeCount])).toEqual([['All Users', 4]]);
     expect(inside.warnings.filter((w) => /bounds/.test(w))).toEqual([]);
 
     const eventSub = Object.values(root.elements).find((e) => e.kind === 'node' && e.originalType === 'subProcess (event)') as NodeDetails;
     const events = await open(eventSub.openCallee!, [root.path[0].id]);
     expect(events.path[1].kind).toBe('Event sub-process');
     expect(Object.values(events.elements).filter((e) => e.kind === 'node')).toHaveLength(3);
+    expect(Object.values(events.elements).filter((e) => e.kind === 'lane').map((l) => [l.name, (l as LaneDetails).nodeCount])).toEqual([['All Users', 3]]);
     expect(events.warnings.filter((w) => /bounds/.test(w))).toEqual([]);
   });
 });

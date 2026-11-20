@@ -68,7 +68,14 @@ export function portLocation(value: string | undefined): PortLocation | undefine
  */
 export function withXmlIds(process: Process): Process {
   const ids = new XmlIdMap();
-  ids.reserve([process.id, ...process.lanes.map((l) => l.id), ...process.nodes.map((n) => n.id), ...process.flows.map((f) => f.id)]);
+  const subLanes = process.nodes.flatMap((n) => n.lanes ?? []);
+  ids.reserve([
+    process.id,
+    ...process.lanes.map((l) => l.id),
+    ...subLanes.map((l) => l.id),
+    ...process.nodes.map((n) => n.id),
+    ...process.flows.map((f) => f.id),
+  ]);
   const map = <T extends { id: string; originalId?: string }>(el: T): T => {
     const safe = ids.get(el.id);
     if (safe === el.id) return el;
@@ -82,6 +89,7 @@ export function withXmlIds(process: Process): Process {
       if (node.parentId !== undefined) node.parentId = ids.get(node.parentId);
       if (node.laneId !== undefined) node.laneId = ids.get(node.laneId);
       if (node.attachedToId !== undefined) node.attachedToId = ids.get(node.attachedToId);
+      if (node.lanes) node.lanes = node.lanes.map((l) => ({ ...map(l), nodeIds: l.nodeIds.map((n) => ids.get(n)) }));
       return node;
     }),
     flows: process.flows.map((f) => ({ ...map(f), sourceId: ids.get(f.sourceId), targetId: ids.get(f.targetId) })),

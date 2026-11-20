@@ -176,6 +176,13 @@ export interface FlowNode {
   parentId?: string;
   /** Sub-processes only: true for an event sub-process (triggeredByEvent="true"). */
   triggeredByEvent?: boolean;
+  /**
+   * Sub-processes only: the lanes of the sub-process's own diagram, when the
+   * source has them (TWX: the BAW sub-process diagram; Bob: a laneSet inside
+   * the bpmn:subProcess). They are independent of the process lanes; the
+   * laneId of a node directly inside the sub-process names one of them.
+   */
+  lanes?: Lane[];
   /** The service or process a call activity calls (TWX: calledElement="1.…" or "25.…"). */
   calledElement?: CalledElement;
   /** Diagram bounds, only when the source has them (a bpmndi section, the TWX diagram). */

@@ -17,8 +17,10 @@
 //     sub-process "Reserve Items": Reserve Start -> Reserve End
 //   event sub-process "On Error": Error Start -> Error End
 // BAW keeps the diagram of a sub-process as an object of its own
-// (25.<sub-process id>, with parentBpdId); Check Stock and On Error have one,
-// Reserve Items has none (its nodes have no positions).
+// (25.<sub-process id>, with parentBpdId), with lanes of its own; Check Stock
+// has one with two lanes (Warehouse: Check Start, Count Items; Shipping:
+// Reserve Items, Check End), On Error one with All Users and an empty lane
+// Escalation, Reserve Items none (its nodes have no lane and no positions).
 
 import JSZip from 'jszip';
 import { readTwxArchive, type TwxArchive } from '../src/twx/twxReader';
@@ -214,8 +216,16 @@ const SUB_PROCESSES_BPMN2 = `
       <bpmn:sequenceFlow id="flow:error" sourceRef="node:error-start" targetRef="node:error-end"/>
     </bpmn:subProcess>`;
 
-/** The diagram object BAW keeps for a sub-process: one pool, one lane, the nodes directly inside. */
-const subProcessObject = (id: string, name: string, flowObjects: string) => `<?xml version="1.0" encoding="UTF-8"?>
+/** A lane of a sub-process diagram object; locations are relative to the lane. */
+interface SubLane {
+  id: string;
+  name: string;
+  height: number;
+  flowObjects: string;
+}
+
+/** The diagram object BAW keeps for a sub-process: one pool, its lanes, the nodes directly inside. */
+const subProcessObject = (id: string, name: string, lanes: SubLane[]) => `<?xml version="1.0" encoding="UTF-8"?>
 <teamworks>
   <bpd id="25.${id}" name="Synthetic Order_${name}">
     <bpmn2Data isNull="true"/>
@@ -223,28 +233,56 @@ const subProcessObject = (id: string, name: string, flowObjects: string) => `<?x
     <BusinessProcessDiagram id="diagram-${id}">
       <pool id="pool-${id}">
         <name>Pool</name>
-        <dimension><size w="3000" h="200"/></dimension>
-        <lane id="lane-${id}">
-          <name>All Users</name>
-          <height>200</height>
-          ${flowObjects}
-        </lane>
+        <dimension><size w="3000" h="${lanes.reduce((h, l) => h + l.height, 0)}"/></dimension>
+        ${lanes
+          .map(
+            (l) => `<lane id="${l.id}">
+          <name>${l.name}</name>
+          <height>${l.height}</height>
+          ${l.flowObjects}
+        </lane>`,
+          )
+          .join('\n        ')}
       </pool>
     </BusinessProcessDiagram>
   </bpd>
 </teamworks>`;
 
-const CHECK_STOCK_OBJECT = subProcessObject(
-  CHECK_STOCK_ID,
-  'Check Stock',
-  `${flowObject('node:check-start', 25, 80)}
-          <flowObject id="node:count"><position><location x="150" y="57"/></position><attachedEvent id="node:timeout"/></flowObject>
-          ${flowObject('node:reserve', 320, 57)}
-          ${flowObject('node:check-end', 500, 80)}`,
-);
+/** Lane ids of the sub-process diagrams. */
+export const SUB_LANE_IDS = {
+  warehouse: 'sublane:warehouse',
+  shipping: 'sublane:shipping',
+  allUsers: 'sublane:all-users',
+  escalation: 'sublane:escalation',
+} as const;
 
-const ON_ERROR_OBJECT = subProcessObject(ON_ERROR_ID, 'On Error', `${flowObject('node:error-start', 25, 80)}
-          ${flowObject('node:error-end', 300, 80)}`);
+const CHECK_STOCK_OBJECT = subProcessObject(CHECK_STOCK_ID, 'Check Stock', [
+  {
+    id: SUB_LANE_IDS.warehouse,
+    name: 'Warehouse',
+    height: 150,
+    flowObjects: `${flowObject('node:check-start', 25, 80)}
+          <flowObject id="node:count"><position><location x="150" y="57"/></position><attachedEvent id="node:timeout"/></flowObject>`,
+  },
+  {
+    id: SUB_LANE_IDS.shipping,
+    name: 'Shipping',
+    height: 120,
+    flowObjects: `${flowObject('node:reserve', 320, 25)}
+          ${flowObject('node:check-end', 500, 48)}`,
+  },
+]);
+
+const ON_ERROR_OBJECT = subProcessObject(ON_ERROR_ID, 'On Error', [
+  {
+    id: SUB_LANE_IDS.allUsers,
+    name: 'All Users',
+    height: 200,
+    flowObjects: `${flowObject('node:error-start', 25, 80)}
+          ${flowObject('node:error-end', 300, 80)}`,
+  },
+  { id: SUB_LANE_IDS.escalation, name: 'Escalation', height: 100, flowObjects: '' },
+]);
 
 /** The BPD with the sub-processes: Check Stock goes between Review Order and Approved?. */
 function withSubProcesses(bpdObject: string): string {
