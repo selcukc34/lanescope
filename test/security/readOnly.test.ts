@@ -85,6 +85,26 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     expect(provider.match(/DESCRIPTION_TEMPLATE/g)).toHaveLength(2);
   });
 
+  it('never writes or edits on the "Open existing" path of New Process Description', () => {
+    const provider = code(path.join('src', 'views', 'processEditorProvider.ts'));
+    const start = provider.indexOf('private async newDescription(session');
+    const method = provider.slice(start, provider.indexOf('\n  }\n', start));
+    expect(method.length).toBeGreaterThan(200);
+    // The one write sits in the branch for a path that does not exist yet.
+    const missingBranch = method.indexOf('if (!(await fileExists(target))) {');
+    const write = method.indexOf(DESCRIPTION_WRITE_LINE);
+    const existingBranch = method.indexOf('if (!created) {');
+    expect(missingBranch).toBeGreaterThan(0);
+    expect(write).toBeGreaterThan(missingBranch);
+    expect(existingBranch).toBeGreaterThan(write);
+    expect(method.match(/writeFile\(/g)).toHaveLength(1);
+    // From "Open existing" on: open the document and attach it, nothing else.
+    const afterWrite = method.slice(existingBranch);
+    expect(afterWrite).not.toMatch(/writeFile|applyEdit|WorkspaceEdit|\.edit\s*\(|insertSnippet|\.save\s*\(|untitled|openTextDocument/);
+    expect(afterWrite).toContain('await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false, viewColumn: vscode.ViewColumn.Beside });');
+    expect(afterWrite).toContain('await session.setDescription(target, true);');
+  });
+
   it('imports only readFile, readdir and stat from the file system module (existsSync in the ELK runner, writeFile for the new description)', () => {
     const imports = FILES.flatMap((file) =>
       [...code(file).matchAll(/import\s+(?:\*\s+as\s+\w+|\{([^}]*)\}|\w+)\s+from\s+'(?:node:)?fs(?:\/promises)?'/g)].map(
