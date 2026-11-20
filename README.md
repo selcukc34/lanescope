@@ -46,7 +46,9 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | --- | --- |
 | **Hide generated flow labels** | Hides flow names that only repeat the target ("To &lt;target&gt;"). Condition and default flows keep their label. On by default. |
 | **Show empty lanes** | Draws lanes that hold no nodes. On by default for a `.twx` export (BAW draws them, with their BAW height); off for Bob output, where the Warnings tab lists them instead. |
+| **Highlight changes** | Marks added (green) and changed (amber) elements of the [comparison](#comparing-versions) in the diagram. On by default; the Changes tab lists them either way. |
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
+| **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Changing a toggle redraws the diagram and keeps the zoom and the selection. The toggles keep their state across live refresh, the process selector and opened services; the default by input type applies only when the file is first opened.
@@ -126,6 +128,22 @@ The viewer watches the opened file and re-reads it 300 ms after the last change.
 - An opened service or linked process stays open. If a level of the breadcrumb is no longer in the file, the viewer stays at the deepest level that still is and says so in a short note.
 - If the new file cannot be read, the last good diagram stays on screen and the error is shown in a banner above it. You can dismiss the banner with **×**. It goes away by itself once the file is fixed.
 
+## Comparing versions
+
+The **Changes** tab lists what was added, removed or changed in the shown process compared with another version of it: nodes, flows, lanes, the process itself (name, documentation, variables) and business objects (XSD or TWX data types, field by field). With **Highlight changes** on, added and changed elements are marked in the diagram; removed ones are listed only. Click an added or changed node, flow or lane (or press Enter on it) to select it, scroll it into view and show its details.
+
+What it is compared with:
+
+- **A file you pick.** **Compare…** in the toolbar, or **Lanescope: Compare With…** in the Command Palette or the editor's **…** menu, asks for a `.bpmn`, `.zip` or `.twx` file. The picked file is the older side: the tab lists the changes from it to the shown file ("Changes from &lt;file&gt; to the shown file"), so pick the earlier version while the newer one is open. The side panel switches to the Changes tab once the file is read. It is read once, like an opened file (same readers and size limits), and never watched or written. It may be in another format than the opened file, for example a Bob `.zip` against its BAW `.twx` export. The file stays the base across live refresh until **Clear** in the Changes tab or **Lanescope: Clear Comparison**.
+- **The previous version.** Without a picked file, each live refresh compares the new version with the one shown before it, so after Bob generates the process again the viewer shows what changed. The comparison stays until a refresh brings a version that differs from the shown one; that refresh compares with the version before it. A refresh with the same content (the file touched, or Bob writing the same process again) keeps the comparison and its time, so the changes stay on screen. Only the shown process and the business objects count, not the file bytes or the layout. When a file is first opened there is nothing to compare yet.
+
+How elements are paired: by id first (Bob keeps its ids when it generates a process again), then by name and kind among the rest (BAW ids change between exports), then by neighbours, which catches a renamed node whose id changed too: same kind, same lane, and the same nodes before and after it. A name or neighbourhood that is not unique pairs nothing, so the element shows as removed and added. Flows pair by id, else by their source and target; lanes by id, else by name. Another process of the package picked in the toolbar is compared with the process of the same id or name in the base.
+
+- Positions, sizes, label positions and ids are not compared: a different layout or a new id alone is not a change.
+- Script code is never shown: a changed script is listed as "Script changed", whatever `lanescope.showScripts` says. Changed mappings list the parameter names only, not the mapped values. Long documentation and conditions are cut to 80 characters.
+- Only processes are compared. Inside an opened service flow or linked process, the Changes tab says so.
+- Exports never hold the change marks.
+
 ## Settings
 
 | Setting | Default | Effect |
@@ -142,6 +160,7 @@ The viewer watches the opened file and re-reads it 300 ms after the last change.
 
 - The extension only reads the files you open. It never writes, changes, renames or deletes a `.bpmn`, `.xsd`, `.zip` or `.twx` file, and it never deploys anything.
 - The one file it writes is an [export](#export), to a new file you pick, never to the opened file or an input type.
+- A file picked to [compare with](#comparing-versions) is only read, never watched or written.
 - Archives are read in memory; nothing is extracted to disk.
 - The diagram view runs under a strict Content Security Policy, uses only scripts bundled in the extension, and makes no network requests.
 
@@ -168,7 +187,7 @@ A Bob process imported into BAW 8.6.6 and exported again shows `gateway-uncondit
 - Children of collapsed sub-processes are not drawn.
 - Bob output is always laid out automatically; any layout made in another tool is not kept.
 - Size limits protect against oversized archives: a Bob `.zip` may hold at most 500 entries and 50 MB uncompressed; a `.twx` may be at most 512 MB, with at most 64 MB per entry.
-- The viewer cannot edit, export or save diagrams.
+- The viewer cannot edit or save diagrams.
 
 ## Development
 

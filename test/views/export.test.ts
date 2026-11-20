@@ -248,7 +248,7 @@ describe('ViewerSession.exportBpmn: Bob zip', () => {
     const posted: HostMessage[] = [];
     const s = session(pkg, posted);
     await s.handleMessage({ type: 'ready' });
-    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true } });
+    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true, highlightChanges: true } });
     // The viewer hides them…
     const shown = await readBack(lastRender(posted).xml);
     expect(shown.flowNames).not.toContain('To Validate Order SF');
@@ -268,7 +268,7 @@ describe('ViewerSession.exportBpmn: Bob zip', () => {
     expect(exported.counts).toEqual({ nodes: 14, flows: 14, lanes: 5 });
     diagramCovers(xml, [...process.nodes.map((n) => n.id), ...process.flows.map((f) => f.id), ...process.lanes.map((l) => l.id)]);
     // The toolbar is as the user left it.
-    expect(s.currentOptions).toEqual({ hideGeneratedFlowLabels: true, hideEmptyLanes: true });
+    expect(s.currentOptions).toEqual({ hideGeneratedFlowLabels: true, hideEmptyLanes: true, highlightChanges: true });
   });
 
   it('keeps gateway conditions and documentation as plain text', async () => {

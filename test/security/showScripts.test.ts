@@ -70,7 +70,7 @@ async function everyMessage(
 
   await act('first load', () => session.handleMessage({ type: 'ready' }));
   await act('webview reload', () => session.handleMessage({ type: 'ready' }));
-  await act('toggle labels', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false } }));
+  await act('toggle labels', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false, highlightChanges: true } }));
   await act('live refresh', () => {
     session.fileChanged();
     timers.fire();
@@ -80,7 +80,7 @@ async function everyMessage(
     session.fileChanged();
     timers.fire();
   });
-  await act('toggle while broken', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true } }));
+  await act('toggle while broken', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true, highlightChanges: true } }));
   await act('file fixed', () => {
     broken = false;
     session.fileChanged();
@@ -97,7 +97,7 @@ async function everyMessage(
       timers.fire();
     });
     await act('webview reload two levels down', () => session.handleMessage({ type: 'ready' }));
-    await act('toggle two levels down', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } }));
+    await act('toggle two levels down', () => session.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } }));
     await act('breadcrumb back to the service', () => {
       const path = lastRender().path.map((l) => l.id);
       return session.handleMessage({ type: 'openCallee', calleeId: path[1], path: path.slice(0, 1) });

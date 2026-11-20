@@ -244,7 +244,7 @@ describe('ViewerSession: "Show empty lanes" default by input type', () => {
     const twx = await readTwxPackage(localTwx('services'));
     const t = session(async () => twx);
     await t.s.handleMessage({ type: 'ready' });
-    await t.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true } });
+    await t.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: true, hideEmptyLanes: true, highlightChanges: true } });
     const child = twx.processes.find((p) => p.name === 'DemoChildProcess')!;
     await t.s.handleMessage({ type: 'selectProcess', processId: child.id });
     await t.s.reload();

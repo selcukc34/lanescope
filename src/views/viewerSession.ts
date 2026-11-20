@@ -39,7 +39,22 @@
 // the host sends that XML to the webview (exportSource) and accepts the
 // image back (exportData) only for the request id it gave out last. Where to
 // write is asked (ExportHost) before anything is drawn.
+//
+// Comparison: every render of a process carries its comparison (src/diff)
+// with a base version. The base is a file the user picked (requestCompare;
+// read once through CompareHost, never watched, never written), else the
+// package that was shown before the latest reload ("previous version"). A
+// picked file stays the base across reloads until clearComparison(); the
+// previous version moves on with every reload that reads a package that
+// differs from the shown one (by the comparison of the chosen process and
+// the business objects, not by file bytes): a reload with the same content
+// (a touch, Bob writing the same process again) keeps the base, so the
+// changes stay on screen.
+// The comparison covers processes only: a drawn service diagram or linked
+// process gets a note instead.
 
+import * as path from 'node:path';
+import { diffProcess, matchProcess } from '../diff/diff';
 import { toDiagramXml } from '../bpmn/toDiagramXml';
 import { BPMN_EXPORT_COMMENT } from './exportFiles';
 import type { Process, ProcessPackage } from '../model/model';
@@ -49,6 +64,7 @@ import {
   DEFAULT_VIEWER_SETTINGS,
   defaultViewOptions,
   parseWebviewMessage,
+  type DiffView,
   type ErrorMessage,
   type ExpectedExport,
   type ExportFormat,
@@ -89,6 +105,18 @@ export interface ViewerSessionDeps {
   settings?: ViewerSettings;
   /** Asks where to save an export and writes it; without it nothing is exported. */
   exporter?: ExportHost;
+  /** Asks for a file to compare with and reads it; without it only the previous version is compared. */
+  comparer?: CompareHost;
+}
+
+/** The editor side of Compare… (open dialog, read-only load, messages). */
+export interface CompareHost {
+  /** Asks for the file to compare with; its path, or undefined when cancelled. */
+  chooseBase(): Promise<string | undefined>;
+  /** Reads the package of that file, with the same reader and limits as the opened file. Never writes. */
+  loadBase(filePath: string): Promise<ProcessPackage>;
+  /** The base could not be read; the viewer is left as it is. */
+  failed(message: string): void;
 }
 
 /** What an export is about: its format, and the drawn level's name when it is below the chosen process. */
@@ -125,13 +153,26 @@ interface Loaded {
   loadedAt: number;
 }
 
-type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload';
+/** A version to compare with, and what the Changes tab calls it. */
+interface Base {
+  kind: 'file' | 'previous';
+  loaded: Loaded;
+  /** File name. */
+  label: string;
+}
+
+/** Shown in the Changes tab while a service diagram or linked process is drawn. */
+export const PROCESSES_ONLY_NOTE = 'Comparison covers processes only.';
+
+type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload' | 'compare';
 
 interface Built {
   loaded: Loaded;
   render: RenderMessage;
   /** Level ids below the chosen process, as drawn. */
   below: string[];
+  /** The previous version once this render is shown. */
+  previous: Loaded | undefined;
 }
 
 /** A level that resolved: its diagram and the problems reading it. */
@@ -152,6 +193,10 @@ export class ViewerSession {
   private loaded: Promise<Loaded> | undefined;
   /** Last package that produced a diagram, and that diagram. */
   private good: Built | undefined;
+  /** The file picked with Compare…, while it is the base. */
+  private fileBase: Base | undefined;
+  /** The package shown before the one in `good`, when a reload brought a new one. */
+  private previous: Loaded | undefined;
   /** Why the latest read or build failed; undefined after a good one. */
   private failure: ErrorMessage | undefined;
   /** Increases with every render request; older results are dropped. */
@@ -280,11 +325,53 @@ export class ViewerSession {
       await this.pending;
     } else if (msg.type === 'exportRequest') {
       await this.requestExport(msg.format);
+    } else if (msg.type === 'compareRequest') {
+      await this.requestCompare();
+    } else if (msg.type === 'clearComparison') {
+      await this.clearComparison();
     } else {
       const expected = this.expectedExport!;
       this.expectedExport = undefined;
       await this.writeExport(expected.target, expected.format, msg.bytes);
     }
+  }
+
+  /** True while a file picked with Compare… is the base. */
+  get comparingWithFile(): boolean {
+    return this.fileBase !== undefined;
+  }
+
+  /**
+   * Compare…: asks for a file, reads it and makes it the base. False when
+   * there is nothing to compare (no diagram drawn, or no comparer). A file
+   * that cannot be read is reported; the view stays as it is.
+   */
+  async requestCompare(): Promise<boolean> {
+    const comparer = this.deps.comparer;
+    if (this.disposed || !this.good || !comparer) return false;
+    const picked = await comparer.chooseBase();
+    if (picked === undefined || this.disposed) return true;
+    const label = path.basename(picked);
+    let pkg: ProcessPackage;
+    try {
+      pkg = await comparer.loadBase(picked);
+    } catch (err) {
+      comparer.failed(`Cannot compare with ${label}: ${errorText(err)}`);
+      return true;
+    }
+    if (this.disposed) return true;
+    this.fileBase = { kind: 'file', loaded: { pkg, loadedAt: this.now() }, label };
+    this.pending = this.run('compare', undefined, true);
+    await this.pending;
+    return true;
+  }
+
+  /** Stops comparing with the picked file: the previous version is the base again. */
+  clearComparison(): Promise<void> {
+    if (this.disposed || !this.fileBase) return this.idle;
+    this.fileBase = undefined;
+    this.pending = this.run('compare');
+    return this.pending;
   }
 
   /**
@@ -358,11 +445,12 @@ export class ViewerSession {
     }
   }
 
-  private async run(mode: RunMode, open?: OpenCalleeMessage): Promise<void> {
+  /** @param showChanges the user just picked a file to compare with: have the webview show the Changes tab. */
+  private async run(mode: RunMode, open?: OpenCalleeMessage, showChanges = false): Promise<void> {
     const generation = ++this.generation;
     if (mode === 'reload') this.loaded = undefined;
-    // A toggle, a settings change, a process switch or a navigation while the file is broken redraws the last good package.
-    const redraw = mode === 'options' || mode === 'settings';
+    // A toggle, a settings change, a new base, a process switch or a navigation while the file is broken redraws the last good package.
+    const redraw = mode === 'options' || mode === 'settings' || mode === 'compare';
     const fromGood = (redraw || mode === 'select' || mode === 'navigate') && this.failure !== undefined && this.good !== undefined;
 
     let result: Built | ErrorMessage;
@@ -385,7 +473,7 @@ export class ViewerSession {
               ...(plan.note ? { note: plan.note } : {}),
             }
           : undefined;
-      const render = await buildRenderMessage(
+      const built = await buildRenderMessage(
         loaded.pkg,
         options,
         preserveView,
@@ -394,7 +482,11 @@ export class ViewerSession {
         this.settings,
         level,
       );
-      result = { loaded, render, below };
+      // A package that differs from the shown one: the shown one becomes the previous version.
+      const previous = this.good && this.good.loaded !== loaded && this.differs(this.good.loaded, loaded, plan.root) ? this.good.loaded : this.previous;
+      const diff = this.diffView(loaded, plan.root, drawn.value.process, plan.levels.length > 1, previous);
+      const render: RenderMessage = diff ? { ...built, diff } : built;
+      result = { loaded, render, below, previous };
     } catch (err) {
       result = buildErrorMessage(this.deps.fileName, err);
     }
@@ -402,10 +494,12 @@ export class ViewerSession {
     this.pending = undefined;
 
     if ('render' in result) {
+      this.previous = result.previous;
       this.good = result;
       this.below = result.below;
       if (!fromGood) this.failure = undefined;
-      this.post(result.render);
+      // showChanges is for this render only: the kept render (re-sent to a reloaded webview) has none.
+      this.post(showChanges ? { ...result.render, showChanges: true } : result.render);
       if (this.failure) this.post(this.banner(this.failure));
     } else {
       this.failure = result;
@@ -455,6 +549,46 @@ export class ViewerSession {
         : `${name} is no longer in the file; showing ${deepest.name || deepest.id}`;
     }
     return { root, levels: resolved.levels, ...(note ? { note } : {}) };
+  }
+
+  /**
+   * True when `loaded` differs from `shown` in the chosen process or the
+   * business objects, as the comparison sees it (layout alone is no difference).
+   */
+  private differs(shown: Loaded, loaded: Loaded, root: Process): boolean {
+    const before = matchProcess(shown.pkg, root, loaded.pkg);
+    if (!before) return true;
+    const d = diffProcess(before, root, shown.pkg.dataTypes, loaded.pkg.dataTypes);
+    return d.counts.added + d.counts.removed + d.counts.changed > 0;
+  }
+
+  /**
+   * The comparison of the chosen process with the base: the picked file, else
+   * the previous version; undefined when there is neither.
+   */
+  private diffView(loaded: Loaded, root: Process, drawn: Process, below: boolean, previous: Loaded | undefined): DiffView | undefined {
+    const base: Base | undefined =
+      this.fileBase ?? (previous ? { kind: 'previous', loaded: previous, label: this.deps.fileName } : undefined);
+    if (!base) return undefined;
+    const empty: DiffView = {
+      baseKind: base.kind,
+      baseLabel: base.label,
+      loadedAt: base.loaded.loadedAt,
+      counts: { added: 0, removed: 0, changed: 0 },
+      added: [],
+      removed: [],
+      changed: [],
+      marks: {},
+    };
+    // Like the validation rules, the comparison is about processes, not service diagrams.
+    if (below || (drawn.source?.kind ?? 'bpd') !== 'bpd') return { ...empty, note: PROCESSES_ONLY_NOTE };
+    const baseProcess = matchProcess(base.loaded.pkg, root, loaded.pkg);
+    if (!baseProcess) {
+      const where = base.kind === 'file' ? `"${base.label}"` : 'the previous version';
+      return { ...empty, note: `No process in ${where} matches "${root.name || root.id}".` };
+    }
+    const d = diffProcess(baseProcess, root, base.loaded.pkg.dataTypes, loaded.pkg.dataTypes);
+    return { ...empty, counts: d.counts, added: d.added, removed: d.removed, changed: d.changed, marks: d.marks };
   }
 
   /** A level below the chosen process: a linked process of the package, or a service diagram. */

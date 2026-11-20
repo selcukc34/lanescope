@@ -1,6 +1,7 @@
 // Messages exchanged between the extension host and the webview. Types only:
 // this file is imported by both sides and must not import `vscode` or DOM code.
 
+import type { DiffEntry, DiffMark } from '../diff/diff';
 import type { CalleeStepKind, DataType } from '../model/model';
 import { MAX_PATH_DEPTH } from './navigation';
 
@@ -9,11 +10,14 @@ export interface ViewOptions {
   hideGeneratedFlowLabels: boolean;
   /** The inverse of the toolbar's "Show empty lanes" toggle. */
   hideEmptyLanes: boolean;
+  /** Mark added and changed elements of the comparison in the diagram (the Changes tab is there either way). */
+  highlightChanges: boolean;
 }
 
 export const DEFAULT_VIEW_OPTIONS: ViewOptions = {
   hideGeneratedFlowLabels: true,
   hideEmptyLanes: true,
+  highlightChanges: true,
 };
 
 /**
@@ -226,6 +230,27 @@ export interface ProcessChoice {
   name: string;
 }
 
+/**
+ * The comparison of the drawn process with another version (src/diff). Only
+ * names, labels and change lines: never script text or mapped values.
+ */
+export interface DiffView {
+  /** A file the user picked, or the version read before the latest reload. */
+  baseKind: 'file' | 'previous';
+  /** File name of the base. */
+  baseLabel: string;
+  /** When the base was read (epoch milliseconds). */
+  loadedAt: number;
+  counts: { added: number; removed: number; changed: number };
+  added: DiffEntry[];
+  removed: DiffEntry[];
+  changed: DiffEntry[];
+  /** Diagram element id → how to mark it. */
+  marks: Record<string, DiffMark>;
+  /** Why there is nothing to list, e.g. a service diagram is drawn or no process matches. */
+  note?: string;
+}
+
 /** Host -> webview: draw a diagram. */
 export interface RenderMessage {
   type: 'render';
@@ -250,6 +275,13 @@ export interface RenderMessage {
   warnings: string[];
   /** When the package was read from disk (epoch milliseconds). */
   loadedAt: number;
+  /** The comparison with the base version; undefined while there is nothing to compare with. */
+  diff?: DiffView;
+  /**
+   * Once, on the render that follows a file picked with Compare…: the webview
+   * switches its side panel to the Changes tab. Never set on any other render.
+   */
+  showChanges?: true;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */
@@ -318,6 +350,16 @@ export interface OpenCalleeMessage {
   path: string[];
 }
 
+/** Webview -> host: the user asked to compare the diagram with another file (Compare…). */
+export interface CompareRequestMessage {
+  type: 'compareRequest';
+}
+
+/** Webview -> host: stop comparing with the picked file (back to the previous version). */
+export interface ClearComparisonMessage {
+  type: 'clearComparison';
+}
+
 /** Webview -> host: the user asked to export the drawn diagram. */
 export interface ExportRequestMessage {
   type: 'exportRequest';
@@ -350,7 +392,9 @@ export type WebviewMessage =
   | SelectProcessMessage
   | OpenCalleeMessage
   | ExportRequestMessage
-  | ExportDataMessage;
+  | ExportDataMessage
+  | CompareRequestMessage
+  | ClearComparisonMessage;
 
 /** A webview message after parseWebviewMessage. */
 export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
@@ -375,6 +419,8 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
   if (typeof value !== 'object' || value === null) return undefined;
   const msg = value as Record<string, unknown>;
   if (msg.type === 'ready') return { type: 'ready' };
+  // Messages without a payload: anything besides the type is refused.
+  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison') && onlyKeys(msg, ['type'])) return { type: msg.type };
   if (msg.type === 'exportRequest' && isExportFormat(msg.format)) return { type: 'exportRequest', format: msg.format };
   if (msg.type === 'exportData') return parseExportData(msg, expected);
   if (msg.type === 'selectProcess' && typeof msg.processId === 'string' && msg.processId.length > 0) {
@@ -391,14 +437,18 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
   }
   if (msg.type === 'setOptions' && typeof msg.options === 'object' && msg.options !== null) {
     const o = msg.options as Record<string, unknown>;
-    if (typeof o.hideGeneratedFlowLabels === 'boolean' && typeof o.hideEmptyLanes === 'boolean') {
+    if (typeof o.hideGeneratedFlowLabels === 'boolean' && typeof o.hideEmptyLanes === 'boolean' && typeof o.highlightChanges === 'boolean') {
       return {
         type: 'setOptions',
-        options: { hideGeneratedFlowLabels: o.hideGeneratedFlowLabels, hideEmptyLanes: o.hideEmptyLanes },
+        options: { hideGeneratedFlowLabels: o.hideGeneratedFlowLabels, hideEmptyLanes: o.hideEmptyLanes, highlightChanges: o.highlightChanges },
       };
     }
   }
   return undefined;
+}
+
+function onlyKeys(msg: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(msg).every((k) => keys.includes(k));
 }
 
 function isExportFormat(v: unknown): v is ExportFormat {

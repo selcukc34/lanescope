@@ -1,4 +1,5 @@
-// Side panel: element details, XSD data types and warnings.
+// Side panel: element details, XSD data types, warnings and the changes
+// against the compared version.
 // Everything from the model (scripts, mappings, conditions included) is set
 // as text (textContent / text nodes), never parsed as HTML, and never run.
 
@@ -6,6 +7,7 @@ import type {
   CalleeDetails,
   CalleeStepDetails,
   CoachDetails,
+  DiffView,
   ElementDetails,
   FlowDetails,
   LaneDetails,
@@ -22,9 +24,30 @@ import type {
 } from '../src/views/protocol';
 import type { DataType } from '../src/model/model';
 import { clear, h } from './dom';
-import { catchesLabel, catchesText, insideSummary, isLinkedType, STEP_KIND_LABELS, stepNote } from './panelText';
+import {
+  catchesLabel,
+  catchesText,
+  changeCount,
+  changeGroups,
+  changesTabTitle,
+  type ChangeRow,
+  comparedWithText,
+  insideSummary,
+  isLinkedType,
+  NOTHING_TO_COMPARE,
+  STEP_KIND_LABELS,
+  stepNote,
+} from './panelText';
 
-export type TabId = 'details' | 'data' | 'warnings';
+export type TabId = 'details' | 'data' | 'warnings' | 'changes';
+
+/** What the Changes tab asks of the viewer. */
+export interface ChangesActions {
+  /** Select a diagram element, scroll it into view and show its details. */
+  reveal(id: string): void;
+  /** Stop comparing with the picked file. */
+  clearComparison(): void;
+}
 
 /** Types that have a row in the Data tab, and how to show one there. */
 interface RevealType {
@@ -38,6 +61,8 @@ interface NodeContext {
   callees: Record<string, CalleeDetails>;
   openCallee(calleeId: string): void;
 }
+
+const STATUS_LABELS = { added: 'Added', changed: 'Changed', removed: 'Removed' } as const;
 
 /** Scripts longer than this are folded to their first lines. */
 const SCRIPT_FOLD_LINES = 20;
@@ -53,6 +78,7 @@ export class SidePanel {
     private readonly onTabChange: (tab: TabId) => void,
     /** The user asked to open a called service or linked process as a diagram. */
     private readonly onOpenCallee: (calleeId: string) => void,
+    private readonly changes: ChangesActions,
   ) {
     const tabBar = h('div', { class: 'tabs', role: 'tablist' });
     const bodies = h('div', { class: 'tab-bodies' });
@@ -60,6 +86,7 @@ export class SidePanel {
       ['details', 'Details'],
       ['data', 'Data'],
       ['warnings', 'Warnings'],
+      ['changes', 'Changes'],
     ] as Array<[TabId, string]>) {
       const button = h('button', { class: 'tab', role: 'tab', type: 'button', id: `tab-${id}` }, label);
       button.addEventListener('click', () => this.showTab(id));
@@ -95,6 +122,7 @@ export class SidePanel {
     this.data = data;
     this.renderData(data.dataTypes);
     this.renderWarnings([...data.warnings, ...importWarnings]);
+    this.renderChanges(data);
     const id = selection ? selection.id : this.selectedId;
     this.select(id && data.elements[id] ? id : undefined);
   }
@@ -170,6 +198,72 @@ export class SidePanel {
         ),
       );
     }
+  }
+
+  private renderChanges(data: RenderMessage): void {
+    const { button, body } = this.tabs.get('changes')!;
+    const diff = data.diff;
+    button.textContent = changesTabTitle(diff);
+    button.classList.toggle('has-changes', diff !== undefined && diff.note === undefined && changeCount(diff) > 0);
+    clear(body);
+    if (!diff) {
+      body.append(h('p', { class: 'empty' }, NOTHING_TO_COMPARE));
+      return;
+    }
+    body.append(this.comparedWith(diff));
+    if (diff.note !== undefined) {
+      body.append(h('p', { class: 'hint' }, diff.note));
+      return;
+    }
+    if (changeCount(diff) === 0) {
+      body.append(h('p', { class: 'empty' }, 'No changes.'));
+      return;
+    }
+    const groups = changeGroups(diff, data.elements);
+    const group = (title: string, rows: ChangeRow[], badge: boolean) =>
+      rows.length > 0
+        ? h('section', { class: 'changes' }, h('h3', {}, `${title} (${rows.length})`), h('ul', { class: 'change-list' }, ...rows.map((r) => this.changeRow(r, badge))))
+        : null;
+    body.append(
+      ...[
+        group('Added', groups.added, false),
+        group('Changed', groups.changed, false),
+        group('Removed', groups.removed, false),
+        group('Business objects', groups.businessObjects, true),
+      ].filter((x): x is HTMLElement => x !== null),
+    );
+    if (groups.removed.length > 0) body.append(h('p', { class: 'hint' }, 'Removed elements are not drawn.'));
+  }
+
+  private comparedWith(diff: DiffView): HTMLElement {
+    const at = new Date(diff.loadedAt).toLocaleString();
+    const text = h('span', { title: diff.baseKind === 'file' ? `Read ${at}` : `The version shown before the latest reload, read ${at}` }, comparedWithText(diff));
+    let clearButton: HTMLButtonElement | null = null;
+    if (diff.baseKind === 'file') {
+      clearButton = h('button', { class: 'button small', type: 'button', title: 'Stop comparing with this file' }, 'Clear');
+      clearButton.addEventListener('click', () => this.changes.clearComparison());
+    }
+    return h('div', { class: 'compared-with' }, text, clearButton);
+  }
+
+  /** One entry: its label (a button that selects the element, when it is drawn) and its change lines. */
+  private changeRow(r: ChangeRow, badge: boolean): HTMLElement {
+    let label: HTMLElement;
+    const id = r.revealId;
+    if (id !== undefined) {
+      // A real button: mouse, Enter and Space all work; the listener is bound each time the list is drawn.
+      const link = h('button', { class: 'link', type: 'button', title: 'Select in the diagram and show its details' }, r.label);
+      link.addEventListener('click', () => this.changes.reveal(id));
+      label = link;
+    } else {
+      label = h('span', { class: 'change-label' }, r.label);
+    }
+    return h(
+      'li',
+      { class: `change ${r.status}` },
+      h('div', { class: 'change-line' }, badge ? h('span', { class: `badge kind diff-${r.status}` }, STATUS_LABELS[r.status]) : null, label),
+      r.changes.length > 0 ? h('ul', { class: 'change-details' }, ...r.changes.map((c) => h('li', {}, c))) : null,
+    );
   }
 
   private renderWarnings(warnings: string[]): void {

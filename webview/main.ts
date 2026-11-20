@@ -41,10 +41,25 @@ interface Viewbox {
   height: number;
 }
 
+interface DiagramElement {
+  id: string;
+  type: string;
+}
+
 interface Canvas {
   zoom(level?: number | 'fit-viewport', center?: { x: number; y: number }): number;
   viewbox(box?: Viewbox): Viewbox & { scale: number };
   resized(): void;
+  addMarker(element: DiagramElement, marker: string): void;
+  scrollToElement(element: DiagramElement, padding?: number): void;
+}
+
+interface ElementRegistry {
+  get(id: string): DiagramElement | undefined;
+}
+
+interface Selection {
+  select(element: DiagramElement | null): void;
 }
 
 interface EventBus {
@@ -68,6 +83,8 @@ const zoomInButton = button('+', 'Zoom in (+)');
 const zoomOutButton = button('−', 'Zoom out (-)');
 const labelsToggle = toggle('Hide generated flow labels', 'Hide "To <target>" flow names; condition and default flows keep their label');
 const lanesToggle = toggle('Show empty lanes', 'Draw lanes that contain no nodes (the Warnings tab lists them)');
+const highlightToggle = toggle('Highlight changes', 'Mark added (green) and changed (amber) elements of the comparison; the Changes tab lists them either way');
+const compareButton = button('Compare…', 'Compare with another version of the process (.bpmn, .zip or .twx)');
 const title = h('span', { class: 'title' });
 // Shown only when the package holds more than one process (a TWX with several BPDs).
 const processSelect = h('select', {
@@ -107,7 +124,9 @@ const toolbar = h(
   h('span', { class: 'spacer' }),
   labelsToggle.label,
   lanesToggle.label,
+  highlightToggle.label,
   h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
+  compareButton,
   exportGroup,
 );
 
@@ -146,6 +165,10 @@ const panel = new SidePanel(
     vscode.setState(state);
   },
   (calleeId) => openCallee(calleeId),
+  {
+    reveal: (id) => revealElement(id),
+    clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
+  },
 );
 if (state.tab) panel.showTab(state.tab);
 
@@ -221,6 +244,7 @@ async function render(msg: RenderMessage): Promise<void> {
   showCrumbs(msg);
   labelsToggle.input.checked = msg.options.hideGeneratedFlowLabels;
   lanesToggle.input.checked = !msg.options.hideEmptyLanes;
+  highlightToggle.input.checked = msg.options.highlightChanges;
   setControlsEnabled(true);
 
   // Any failure below must end on the error screen, never on "Loading…".
@@ -238,9 +262,12 @@ async function render(msg: RenderMessage): Promise<void> {
     } else {
       canvas().zoom('fit-viewport');
     }
+    markChanges(msg);
     // On the same level the selected element is kept while its id exists; another level starts
     // with the selection it had when it was left, or none.
     panel.setData(msg, importWarnings, sameLevel ? undefined : { id: restored?.selection });
+    // A file was just picked with Compare…: show what it changed (kept like any tab choice).
+    if (msg.showChanges === true) panel.showTab('changes');
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -251,6 +278,34 @@ async function render(msg: RenderMessage): Promise<void> {
       message: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+const DIFF_MARKERS = { added: 'ls-diff-added', changed: 'ls-diff-changed' } as const;
+
+/** Marks the added and changed elements of the comparison (this viewer only; exports draw in a viewer of their own). */
+function markChanges(msg: RenderMessage): void {
+  if (!msg.diff || !msg.options.highlightChanges) return;
+  const registry = viewer.get<ElementRegistry>('elementRegistry');
+  for (const [id, mark] of Object.entries(msg.diff.marks)) {
+    const element = registry.get(id);
+    // Elements the toolbar hides (empty lanes) are not drawn.
+    if (element && (mark === 'added' || mark === 'changed')) canvas().addMarker(element, DIFF_MARKERS[mark]);
+  }
+}
+
+/**
+ * A row of the Changes tab was clicked: select the element (as a click on it
+ * does), scroll it into view at the current zoom, and show its details.
+ */
+function revealElement(id: string): void {
+  if (!current) return;
+  const element = viewer.get<ElementRegistry>('elementRegistry').get(id);
+  if (!element) return;
+  viewer.get<Selection>('selection').select(element);
+  // Scrolls only when the element is (partly) out of view; the zoom stays.
+  canvas().scrollToElement(element, 80);
+  panel.select(id);
+  panel.showTab('details');
 }
 
 function showError(msg: ErrorMessage): void {
@@ -302,7 +357,7 @@ function showProcessChoices(msg: RenderMessage): void {
 }
 
 function setControlsEnabled(enabled: boolean): void {
-  for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, processSelect, backButton]) {
+  for (const control of [fitButton, zoomInButton, zoomOutButton, labelsToggle.input, lanesToggle.input, highlightToggle.input, compareButton, processSelect, backButton]) {
     control.disabled = !enabled;
   }
   // Export works on the drawn diagram only (not on the error screen), one image at a time.
@@ -376,6 +431,7 @@ function sendOptions(): void {
   const options: ViewOptions = {
     hideGeneratedFlowLabels: labelsToggle.input.checked,
     hideEmptyLanes: !lanesToggle.input.checked,
+    highlightChanges: highlightToggle.input.checked,
   };
   setControlsEnabled(false);
   vscode.postMessage({ type: 'setOptions', options });
@@ -386,6 +442,8 @@ processSelect.addEventListener('change', () => {
   vscode.postMessage({ type: 'selectProcess', processId: processSelect.value });
 });
 lanesToggle.input.addEventListener('change', sendOptions);
+highlightToggle.input.addEventListener('change', sendOptions);
+compareButton.addEventListener('click', () => vscode.postMessage({ type: 'compareRequest' }));
 
 canvasHost.addEventListener('keydown', (e) => {
   if (!current) return;
