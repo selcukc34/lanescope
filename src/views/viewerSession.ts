@@ -56,6 +56,16 @@
 // (at any depth, through sub-processes only) shows the comparison of the
 // chosen process; its marks fall on the elements drawn there.
 //
+// Search: the index of the whole file (src/search) is built on the host the
+// first time the webview searches, and again after a reload or a change of
+// showScripts (it is kept with the package it was built from). Each query
+// is answered with its request id; an answer to a request older than the
+// latest one is not posted.
+//
+// Root levels: the first level is the chosen process, or a service shown on
+// its own (showLevel with a serviceId: a search result in a service no
+// process calls). Picking a process in the picker leaves the service.
+//
 // Description check: a Markdown description attached with setDescription()
 // (picked by the user, or found next to the opened file) is read through
 // DescriptionHost, never written, and checked against the chosen process
@@ -72,6 +82,8 @@ import { findSubProcess, isSubProcessLevelId, SUB_LEVEL_PREFIX, subProcessDiagra
 import { MAX_PATH_DEPTH, openInPath, resolvePath } from './navigation';
 import { parseDescription, type ProcessDescription } from '../trace/description';
 import { checkTrace, traceSummary } from '../trace/trace';
+import { findObject, search, type SearchIndex } from '../search/search';
+import { buildSearchIndex } from '../search/searchIndex';
 import {
   DEFAULT_VIEW_OPTIONS,
   DEFAULT_VIEWER_SETTINGS,
@@ -85,6 +97,7 @@ import {
   type LevelSummary,
   type OpenCalleeMessage,
   type RenderMessage,
+  type SearchMessage,
   type TraceView,
   type ViewerSettings,
   type ViewOptions,
@@ -202,7 +215,7 @@ interface Base {
 /** Shown in the Changes tab while a service diagram or linked process is drawn. */
 export const PROCESSES_ONLY_NOTE = 'Comparison covers processes only.';
 
-type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload' | 'compare' | 'trace';
+type RunMode = 'initial' | 'options' | 'settings' | 'select' | 'navigate' | 'reload' | 'compare' | 'trace' | 'show';
 
 /** One-time flags of a render: switch the webview to a tab. */
 interface Once {
@@ -213,8 +226,10 @@ interface Once {
 interface Built {
   loaded: Loaded;
   render: RenderMessage;
-  /** Level ids below the chosen process, as drawn. */
+  /** Level ids below the root, as drawn. */
   below: string[];
+  /** The service drawn as the root level, when it is not the chosen process. */
+  serviceRoot: string | undefined;
   /** The previous version once this render is shown. */
   previous: Loaded | undefined;
 }
@@ -231,8 +246,14 @@ export class ViewerSession {
   private settings: ViewerSettings;
   /** Id of the process the user picked; undefined shows the first. */
   private processId: string | undefined;
-  /** Level ids of the open levels below the chosen process; empty shows the process itself. */
+  /** Level ids of the open levels below the root; empty shows the root itself. */
   private below: string[] = [];
+  /** A service shown as the root level instead of the chosen process. */
+  private serviceRoot: string | undefined;
+  /** The search index and what it was built from. */
+  private searchIndex: { pkg: ProcessPackage; showScripts: boolean; index: Promise<SearchIndex> } | undefined;
+  /** Id of the latest search request; answers to older ones are not posted. */
+  private latestSearch = -1;
   /** Read of the file the next render uses; cleared to force a re-read. */
   private loaded: Promise<Loaded> | undefined;
   /** Last package that produced a diagram, and that diagram. */
@@ -452,9 +473,22 @@ export class ViewerSession {
       await this.start();
     } else if (msg.type === 'selectProcess') {
       this.processId = msg.processId;
+      this.serviceRoot = undefined;
       this.below = [];
       this.pending = this.run('select');
       await this.pending;
+    } else if (msg.type === 'showLevel') {
+      if (msg.processId !== undefined) {
+        this.processId = msg.processId;
+        this.serviceRoot = undefined;
+      } else {
+        this.serviceRoot = msg.serviceId;
+      }
+      this.below = [...msg.below];
+      this.pending = this.run('show');
+      await this.pending;
+    } else if (msg.type === 'search') {
+      await this.answerSearch(msg);
     } else if (msg.type === 'openCallee') {
       this.pending = this.run('navigate', msg);
       await this.pending;
@@ -481,6 +515,34 @@ export class ViewerSession {
       this.expectedExport = undefined;
       await this.writeExport(expected.target, expected.format, msg.bytes);
     }
+  }
+
+  /**
+   * Answers a search with the index of the shown package, built now when
+   * there is none for it (or for the current showScripts) yet.
+   */
+  private async answerSearch(msg: SearchMessage): Promise<void> {
+    this.latestSearch = Math.max(this.latestSearch, msg.requestId);
+    const good = this.good;
+    if (!good) return;
+    const index = await this.indexFor(good.loaded.pkg);
+    // A newer query came in meanwhile, or the viewer closed: its answer is the one that counts.
+    if (msg.requestId !== this.latestSearch || this.disposed) return;
+    const shown = good.serviceRoot !== undefined
+      ? findObject(index, 'service', good.serviceRoot)
+      : findObject(index, 'process', good.render.rootProcessId);
+    const result = search(index, msg.query, { scope: msg.scope, ...(shown !== undefined ? { shownObject: shown } : {}) });
+    this.post({ type: 'searchResult', requestId: msg.requestId, result });
+  }
+
+  /** The search index of `pkg` with the current settings; built once, on first use. */
+  indexFor(pkg: ProcessPackage): Promise<SearchIndex> {
+    const showScripts = this.settings.showScripts;
+    const cached = this.searchIndex;
+    if (cached && cached.pkg === pkg && cached.showScripts === showScripts) return cached.index;
+    const index = buildSearchIndex(pkg, { showScripts });
+    this.searchIndex = { pkg, showScripts, index };
+    return index;
   }
 
   /** True while a file picked with Compare… is the base. */
@@ -560,15 +622,18 @@ export class ViewerSession {
     const pkg = good.loaded.pkg;
     const root = pkg.processes.find((p) => p.id === good.render.rootProcessId);
     if (!root) throw new Error('The shown process is no longer in the file.');
-    const resolved = await resolvePath<Level>([processLevelId(root), ...good.below], (id, depth, above) =>
-      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id, above),
+    const serviceRoot = good.serviceRoot;
+    const rootId = serviceRoot ?? processLevelId(root);
+    const resolved = await resolvePath<Level>([rootId, ...good.below], (id, depth, above) =>
+      depth > 0 ? this.level(pkg, id, above) : serviceRoot !== undefined ? this.level(pkg, serviceRoot, undefined) : { process: root, warnings: [] },
     );
     if (resolved.missing !== undefined) throw new Error('The shown diagram is no longer in the file.');
     const process = resolved.levels[resolved.levels.length - 1].value.process;
     const { xml } = await toDiagramXml(process, EXPORT_DIAGRAM_OPTIONS);
     // toDiagramXml writes no script; this keeps it that way.
     if (SCRIPT_ELEMENT.test(xml)) throw new Error('The export would contain script text.');
-    return { xml: withExportComment(xml), ...(good.below.length > 0 ? { levelName: process.name || process.id } : {}) };
+    const below = good.below.length > 0 || serviceRoot !== undefined;
+    return { xml: withExportComment(xml), ...(below ? { levelName: process.name || process.id } : {}) };
   }
 
   private async writeExport(target: string, format: ExportFormat, bytes: Uint8Array): Promise<void> {
@@ -598,7 +663,7 @@ export class ViewerSession {
     if (mode === 'reload') this.loaded = undefined;
     // A toggle, a settings change, a new base, a process switch or a navigation while the file is broken redraws the last good package.
     const redraw = mode === 'options' || mode === 'settings' || mode === 'compare' || mode === 'trace';
-    const fromGood = (redraw || mode === 'select' || mode === 'navigate') && this.failure !== undefined && this.good !== undefined;
+    const fromGood = (redraw || mode === 'select' || mode === 'navigate' || mode === 'show') && this.failure !== undefined && this.good !== undefined;
 
     let result: Built | ErrorMessage;
     try {
@@ -608,14 +673,19 @@ export class ViewerSession {
       const below = plan.levels.slice(1).map((l) => l.id);
       // A toggle keeps the zoom, and so does a reload that shows the same level; a new level is fitted
       // (the webview brings back the view of a level it showed before).
-      const sameLevel = this.good !== undefined && sameIds(this.good.below, below) && this.good.render.rootProcessId === plan.root.id;
+      const sameLevel =
+        this.good !== undefined &&
+        sameIds(this.good.below, below) &&
+        this.good.render.rootProcessId === plan.root.id &&
+        this.good.serviceRoot === plan.serviceRoot;
       const preserveView = redraw || (mode === 'reload' && sameLevel);
       const drawn = plan.levels[plan.levels.length - 1];
       const level: LevelView | undefined =
-        plan.levels.length > 1 || plan.note
+        plan.levels.length > 1 || plan.note || plan.serviceRoot !== undefined
           ? {
               process: drawn.value.process,
-              path: plan.levels.map((l) => levelSummary(l.value.process)),
+              // The ids the levels were opened with, so that the webview can send them back.
+              path: plan.levels.map((l) => ({ ...levelSummary(l.value.process), id: l.id })),
               warnings: drawn.value.warnings,
               ...(plan.note ? { note: plan.note } : {}),
             }
@@ -631,10 +701,16 @@ export class ViewerSession {
       );
       // A package that differs from the shown one: the shown one becomes the previous version.
       const previous = this.good && this.good.loaded !== loaded && this.differs(this.good.loaded, loaded, plan.root) ? this.good.loaded : this.previous;
-      const diff = this.diffView(loaded, plan.root, plan.levels.slice(1).map((l) => l.value.process), previous);
+      // A service root is not part of the chosen process: like any service level, it gets the note.
+      const diff = this.diffView(loaded, plan.root, plan.levels.slice(plan.serviceRoot !== undefined ? 0 : 1).map((l) => l.value.process), previous);
       const trace = this.traceView(loaded.pkg, plan.root);
-      const render: RenderMessage = { ...built, ...(diff ? { diff } : {}), ...(trace ? { trace } : {}) };
-      result = { loaded, render, below, previous };
+      const render: RenderMessage = {
+        ...built,
+        ...(diff ? { diff } : {}),
+        ...(trace ? { trace } : {}),
+        ...(plan.serviceRoot !== undefined ? { serviceRoot: true as const } : {}),
+      };
+      result = { loaded, render, below, previous, serviceRoot: plan.serviceRoot };
     } catch (err) {
       result = buildErrorMessage(this.deps.fileName, err);
     }
@@ -645,6 +721,7 @@ export class ViewerSession {
       this.previous = result.previous;
       this.good = result;
       this.below = result.below;
+      this.serviceRoot = result.serviceRoot;
       if (!fromGood) this.failure = undefined;
       // The tab switches are for this render only: the kept render (re-sent to a reloaded webview) has none.
       this.post({ ...result.render, ...once });
@@ -664,14 +741,33 @@ export class ViewerSession {
   private async levels(
     pkg: ProcessPackage,
     open: OpenCalleeMessage | undefined,
-  ): Promise<{ root: Process; levels: Array<{ id: string; value: Level }>; note?: string }> {
+  ): Promise<{ root: Process; levels: Array<{ id: string; value: Level }>; note?: string; serviceRoot?: string }> {
     const root = pkg.processes.find((p) => p.id === this.processId) ?? pkg.processes[0];
     if (!root) throw new Error('The BPMN file does not contain a process.');
-    const rootId = processLevelId(root);
-    // The chosen process is gone (the file changed): its levels are gone with it.
-    const below = this.processId === undefined || root.id === this.processId ? this.below : [];
-    let path = [rootId, ...below];
     let note: string | undefined;
+    // A service shown on its own; when it is gone (or cannot be drawn), the chosen process again.
+    let serviceRoot = this.serviceRoot;
+    let rootLevel: Level = { process: root, warnings: [] };
+    if (serviceRoot !== undefined) {
+      const service = await this.level(pkg, serviceRoot, undefined);
+      if (service && !isSubProcessLevelId(serviceRoot)) {
+        rootLevel = service;
+      } else {
+        note = `${this.levelName(pkg, serviceRoot)} cannot be opened`;
+        serviceRoot = undefined;
+      }
+    }
+    const rootId = serviceRoot ?? processLevelId(root);
+    // The root is gone (the file changed): its levels are gone with it.
+    const below =
+      this.serviceRoot !== undefined
+        ? serviceRoot !== undefined
+          ? this.below
+          : []
+        : this.processId === undefined || root.id === this.processId
+          ? this.below
+          : [];
+    let path = [rootId, ...below];
     if (open) {
       const target = openInPath(open.path, open.calleeId);
       // A message about another chosen process is stale (the picker changed meanwhile): keep the path.
@@ -682,9 +778,7 @@ export class ViewerSession {
     }
     const jumped = open !== undefined && path[0] === rootId && openInPath(open.path, open.calleeId).kind === 'jump';
 
-    const resolved = await resolvePath<Level>(path, (id, depth, above) =>
-      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id, above),
-    );
+    const resolved = await resolvePath<Level>(path, (id, depth, above) => (depth === 0 ? rootLevel : this.level(pkg, id, above)));
     if (jumped && resolved.missing === undefined) {
       const at = resolved.levels[resolved.levels.length - 1].value.process;
       note = `${at.name || at.id} is already open in this path`;
@@ -696,7 +790,7 @@ export class ViewerSession {
         ? `${name} cannot be opened`
         : `${name} is no longer in the file; showing ${deepest.name || deepest.id}`;
     }
-    return { root, levels: resolved.levels, ...(note ? { note } : {}) };
+    return { root, levels: resolved.levels, ...(note ? { note } : {}), ...(serviceRoot !== undefined ? { serviceRoot } : {}) };
   }
 
   /**

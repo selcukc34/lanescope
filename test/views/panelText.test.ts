@@ -97,10 +97,9 @@ describe('Changes tab rows', () => {
 });
 
 describe('Search tab text', () => {
-  it('counts the groups with a match; no count while the query is too short', () => {
-    expect(searchTabTitle({ tooShort: true, groups: [] })).toBe('Search');
-    expect(searchTabTitle({ tooShort: false, groups: [] })).toBe('Search (0)');
-    const group = { group: { target: { type: 'process' as const }, kind: 'Process', name: 'P', where: [] }, hits: [] };
-    expect(searchTabTitle({ tooShort: false, groups: [group, group, group] })).toBe('Search (3)');
+  it('counts the elements with a match; no count while the query is too short', () => {
+    expect(searchTabTitle({ tooShort: true, groupCount: 0 })).toBe('Search');
+    expect(searchTabTitle({ tooShort: false, groupCount: 0 })).toBe('Search (0)');
+    expect(searchTabTitle({ tooShort: false, groupCount: 3 })).toBe('Search (3)');
   });
 });

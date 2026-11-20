@@ -17,11 +17,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readBpmnPackage } from '../../src/input/bpmnInput';
 import { readProcessPackage } from '../../src/bpmn/bpmnReader';
 import type { ProcessPackage } from '../../src/model/model';
-import type { RenderMessage } from '../../src/views/protocol';
+import type { HostMessage, RenderMessage } from '../../src/views/protocol';
 import { ViewerSession } from '../../src/views/viewerSession';
 import { buildCsp } from '../../src/views/webviewHtml';
 import { NOTIFY_TASK_ID, V1_ZIP, V2_ZIP } from '../bobV2';
-import { BPD_ID, PRICE_SERVICE_ID, syntheticTwxPackage } from '../syntheticTwx';
+import { DISCOUNT_SERVICE_ID, PRICE_SERVICE_ID, syntheticTwxPackage } from '../syntheticTwx';
 
 const DESCRIPTION_MD = path.join(__dirname, '..', 'fixtures', 'bob', 'order-delivery-process-description.md');
 
@@ -528,7 +528,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     await page.eval('window.__posted.length = 0');
     await page.clickButton('Pick Items');
     const posted = await page.eval<unknown[]>('window.__posted');
-    expect(posted).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
+    // From wherever the view is (a service on its own too): the chosen process, then the sub-process.
+    expect(posted).toEqual([{ type: 'showLevel', processId: 'order', below: ['sub:prepare'] }]);
     const level = await subTrace.open(posted[0]);
     expect(level.path.map((l) => l.id)).toEqual(['order', 'sub:prepare']);
     await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
@@ -768,14 +769,69 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Data');
   });
 
+  // The webview sends its searches and the levels a result opens to the host: these tests run a
+  // real ViewerSession in Node and carry the messages both ways (pump).
+  let host: { s: ViewerSession; out: HostMessage[] } | undefined;
+
+  /** Opens the page on the first render of a session on `load`, which then answers the page. */
+  async function openHosted(load: () => Promise<ProcessPackage>, options: { fileName?: string; query?: string } = {}): Promise<RenderMessage> {
+    const out: HostMessage[] = [];
+    const s = new ViewerSession({ fileName: options.fileName ?? 'order.zip', load, post: (m) => void out.push(m) });
+    await s.handleMessage({ type: 'ready' });
+    const first = out.find((m): m is RenderMessage => m.type === 'render')!;
+    out.length = 0;
+    host = { s, out };
+    await page.open(`${url}${options.query ?? ''}`, first);
+    await pump();
+    return first;
+  }
+
+  /** Hands what the page posted to the host and the host's answers back to the page, until both are quiet. */
+  async function pump(): Promise<void> {
+    for (let round = 0; round < 8; round++) {
+      const posted = await page.eval<unknown[]>(`(() => { const p = window.__posted.slice(); window.__posted.length = 0; return p; })()`);
+      for (const m of posted) await host!.s.handleMessage(m);
+      const answers = host!.out.splice(0);
+      if (posted.length === 0 && answers.length === 0) return;
+      if (answers.length > 0) {
+        await page.eval(`(async () => { for (const m of ${JSON.stringify(answers)}) window.postMessage(m, '*'); await new Promise((r) => setTimeout(r, 350)); })()`);
+      }
+    }
+  }
+
+  /** What the page posted and the host has not seen yet, of one type. */
+  const postedOf = (type: string) => page.eval<Array<Record<string, unknown>>>(`window.__posted.filter((m) => m.type === ${JSON.stringify(type)})`);
+
+  /** Types into the search box (real key input), waits out the debounce and lets the host answer. */
+  async function typeSearch(text: string): Promise<void> {
+    await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); i.select(); })()`);
+    await page.send('Input.insertText', { text });
+    await page.eval('new Promise((r) => setTimeout(r, 320))');
+    await pump();
+  }
+
+  /** Clicks a button by the start of its text in the Search tab (rows, group heads), then lets the host answer. */
+  async function clickResult(selector: string, text: string): Promise<void> {
+    await page.eval(`(() => { const b = [...document.querySelectorAll(${JSON.stringify(selector)})].find((x) => x.textContent.startsWith(${JSON.stringify(text)})); if (!b) throw new Error('no result ' + ${JSON.stringify(text)}); b.click(); })()`);
+  }
+
+  const selected = `[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`;
+  const details = `document.querySelector('[aria-labelledby="tab-details"] h2').textContent`;
+  const crumbsText = `document.querySelector('.crumbs').hidden ? [] : [...document.querySelectorAll('.crumbs li')].map((e) => e.textContent)`;
+
+  /** The synthetic export with a second process: Approved? is "Approved twice?" there. */
+  async function twoProcesses(): Promise<{ pkg: ProcessPackage; otherId: string }> {
+    const pkg = await syntheticTwxPackage();
+    const other = await syntheticTwxPackage({ otherIds: true });
+    other.processes[0].name = 'Second Order';
+    other.processes[0].nodes.find((n) => n.name === 'Approved?')!.name = 'Approved twice?';
+    pkg.processes.push(other.processes[0]);
+    return { pkg, otherId: other.processes[0].id };
+  }
+
   describe('reveal if needed', () => {
     const zoomIn = (times: number) =>
       page.eval(`(() => { const plus = [...document.querySelectorAll('button')].find((b) => b.textContent === '+'); for (let i = 0; i < ${times}; i++) plus.click(); })()`);
-    const typeSearch = async (text: string) => {
-      await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); i.select(); })()`);
-      await page.send('Input.insertText', { text });
-      await page.eval('new Promise((r) => setTimeout(r, 320))');
-    };
     /** An element brought into view moved as little as it could: one edge is the margin away, it is not in the middle. */
     const expectMinimal = (p: Placement) => {
       for (const edge of [p.left, p.top, p.right, p.bottom]) expect(edge).toBeGreaterThanOrEqual(30);
@@ -787,13 +843,17 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await page.open(url, render);
       const before = await page.eval<string>(viewport);
       await page.clickButton('User task "Manager Review"');
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([MANAGER_TASK_ID]);
+      expect(await page.eval<string[]>(selected)).toEqual([MANAGER_TASK_ID]);
       expect(await page.eval<string>(viewport)).toBe(before);
       await page.clickSelector(`[data-element-id="${ROUTE_GATEWAY_ID}"] .djs-hit`);
       expect(await page.eval<string>(viewport)).toBe(before);
+
+      await openHosted(async () => v1Package);
+      const searchBefore = await page.eval<string>(viewport);
       await typeSearch('Handle Exception');
       await page.eval(`document.querySelector('.search-row').click()`);
-      expect(await page.eval<string>(viewport)).toBe(before);
+      expect((await page.eval<string[]>(selected)).length).toBe(1);
+      expect(await page.eval<string>(viewport)).toBe(searchBefore);
 
       await page.open(url, trace.picked);
       const traceBefore = await page.eval<string>(viewport);
@@ -804,19 +864,19 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
 
     it('moves an element out of view in by as little as needed, at the same zoom: Search, Changes and Trace rows', async () => {
       // Search.
-      await page.open(url, trace.found);
+      const first = await openHosted(async () => v1Package);
       await zoomIn(8);
       const zoomed = await page.eval<string>(viewport);
-      const target = Object.values(trace.found.elements).find((e) => e.name === 'Exception Handled')!.id;
+      const target = Object.values(first.elements).find((e) => e.name === 'Exception Handled')!.id;
       const out = await page.eval<Placement>(placement(target));
       expect(Math.min(out.left, out.top, out.right, out.bottom)).toBeLessThan(0);
       await typeSearch('Exception Handled');
-      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('End event')).click()`);
+      await clickResult('.search-head', 'End event');
       expect(scaleOf(await page.eval<string>(viewport))).toBeCloseTo(scaleOf(zoomed), 2);
       expectMinimal(await page.eval<Placement>(placement(target)));
       // Revealed again: in view now, nothing moves.
       const once = await page.eval<string>(viewport);
-      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('End event')).click()`);
+      await clickResult('.search-head', 'End event');
       expect(await page.eval<string>(viewport)).toBe(once);
 
       // Changes.
@@ -839,16 +899,23 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
   });
 
   describe('keyword search', () => {
-    /** Types into the search box (real key input) and waits out the debounce. */
-    const typeSearch = async (text: string) => {
-      await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); i.select(); })()`);
-      await page.send('Input.insertText', { text });
-      await page.eval('new Promise((r) => setTimeout(r, 320))');
+    type SearchUi = {
+      tab: string | null;
+      active: string;
+      summary: string | null;
+      objects: Array<[string, boolean]>;
+      groups: string[];
+      rows: string[];
+      marks: string[];
+      empty: string | null;
+      notes: string[];
+      state: Record<string, unknown>;
     };
-    type SearchUi = { tab: string | null; active: string; groups: string[]; rows: string[]; marks: string[]; empty: string | null; notes: string[]; state: unknown };
     const searchUi = `({
       tab: (() => { const b = document.getElementById('tab-search'); return b.hidden ? null : b.textContent; })(),
       active: document.querySelector('.tab.active').textContent,
+      summary: document.querySelector('.search-summary')?.textContent ?? null,
+      objects: [...document.querySelectorAll('.search-object')].map((d) => [d.querySelector('.search-object-name').textContent, d.open]),
       groups: [...document.querySelectorAll('.search-head')].map((e) => e.textContent),
       rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
       marks: [...document.querySelectorAll('.search-row mark')].map((e) => e.textContent),
@@ -859,53 +926,63 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     const focused = `(() => { const a = document.activeElement; return a.classList.contains('search-input') ? 'input' : a.textContent; })()`;
 
     it('is always in the toolbar, next to Trace, with its placeholder and tooltip', async () => {
-      await page.open(url, trace.found);
+      await openHosted(async () => v1Package);
       const box = await page.eval<{ placeholder: string; title: string; after: string }>(`(() => { const i = document.querySelector('.search-input'); return { placeholder: i.placeholder, title: i.title, after: i.previousElementSibling.textContent }; })()`);
       expect(box).toEqual({ placeholder: 'Search…', title: 'Search names, documentation, scripts, conditions… (Cmd/Ctrl+F)', after: expect.stringContaining('Trace') });
-      // No tab until there is a search.
       expect((await page.eval<SearchUi>(searchUi)).tab).toBeNull();
     });
 
-    it('opens the Search tab on typing, with the count of groups and highlighted matches', async () => {
-      await page.open(url, trace.found);
-      await typeSearch('Validate');
+    it('asks the host and opens the Search tab with the count, the objects and highlighted matches', async () => {
+      await openHosted(async () => v1Package);
+      await page.eval(`(() => { const i = document.querySelector('.search-input'); i.focus(); })()`);
+      await page.send('Input.insertText', { text: 'Validate' });
+      await page.eval('new Promise((r) => setTimeout(r, 320))');
+      expect(await postedOf('search')).toEqual([{ type: 'search', requestId: expect.any(Number), query: 'Validate', scope: 'file' }]);
+      await pump();
       const ui = await page.eval<SearchUi>(searchUi);
       expect(ui.tab).toBe(`Search (${ui.groups.length})`);
       expect(ui.active).toBe(ui.tab);
+      expect(ui.summary).toBe(`${ui.rows.length} matches in 1 object`);
+      expect(ui.objects).toEqual([['Process: Order Delivery Process', true]]);
       expect(ui.groups.slice(0, 2)).toEqual(['TaskValidate Order SF', 'Sequence flowTo Validate Order SF']);
       expect(ui.rows[0]).toBe('NameValidate Order SF');
       expect(ui.marks.every((m) => m.toLowerCase() === 'validate')).toBe(true);
       expect(ui.state).toMatchObject({ search: 'Validate', tab: 'search' });
-      // Nothing is drawn on the canvas for a match.
       expect(await page.eval<number>(`document.querySelectorAll('.djs-element.ls-selected, .djs-element.selected').length`)).toBe(0);
     });
 
+    it('drops an answer to an older request', async () => {
+      await openHosted(async () => v1Package);
+      await typeSearch('Validate');
+      const before = (await page.eval<SearchUi>(searchUi)).rows;
+      const stale = { type: 'searchResult', requestId: 0, result: { query: 'zz', scope: 'file', tooShort: false, objects: [], groupCount: 0, shown: 0, total: 0, truncated: false, scriptsOmitted: 0, toolkitsNotSearched: false } };
+      await page.eval(`(async () => { window.postMessage(${JSON.stringify(stale)}, '*'); await new Promise((r) => setTimeout(r, 100)); })()`);
+      expect((await page.eval<SearchUi>(searchUi)).rows).toEqual(before);
+      expect((await page.eval<SearchUi>(searchUi)).empty).toBeNull();
+    });
+
     it('selects the element of a clicked row in place, updates Details and stays on Search', async () => {
-      await page.open(url, trace.found);
+      const first = await openHosted(async () => v1Package);
       await typeSearch('EXCEPTION');
       const before = await page.eval<string>(viewport);
       await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent.includes('tw.local.order.route != "EXCEPTION"')).click()`);
-      const after = await page.eval<{ selected: string[]; details: string; tab: string }>(`({
-        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
-        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
-        tab: document.querySelector('.tab.active').textContent,
-      })`);
-      const validId = Object.values(trace.found.elements).find((e) => e.kind === 'flow' && e.name === 'Valid')!.id;
-      expect(after.selected).toEqual([validId]);
-      expect(after.details).toBe('Valid');
-      expect(after.tab).toMatch(/^Search \(/);
-      // In view already: the view does not move.
+      const validId = Object.values(first.elements).find((e) => e.kind === 'flow' && e.name === 'Valid')!.id;
+      expect(await page.eval<string[]>(selected)).toEqual([validId]);
+      expect(await page.eval<string>(details)).toBe('Valid');
+      expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toMatch(/^Search \(/);
       expect(await page.eval<string>(viewport)).toBe(before);
-      // The group head selects the element too.
-      await page.eval(`[...document.querySelectorAll('.search-head')].find((b) => b.textContent.includes('Route Order')).click()`);
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([ROUTE_GATEWAY_ID]);
+      await clickResult('.search-head', 'Exclusive gatewayRoute Order');
+      expect(await page.eval<string[]>(selected)).toEqual([ROUTE_GATEWAY_ID]);
       expect(await page.eval<string>(viewport)).toBe(before);
+      // A field of the business object: the Data tab, on that field.
+      await typeSearch('countryRegion');
+      await clickResult('.search-row', 'Fieldcountry');
+      expect(await page.eval<{ tab: string; flash: string | null }>(`({ tab: document.querySelector('.tab.active').textContent, flash: document.querySelector('.flash')?.getAttribute('data-field-name') ?? null })`)).toEqual({ tab: 'Data', flash: 'countryRegion' });
       expect(await page.eval<string[]>('window.__errors')).toEqual([]);
     });
 
     it('Cmd/Ctrl+F focuses the box, Escape clears it and closes the tab without leaving the level', async () => {
-      await page.open(url, trace.found);
-      await page.eval(`document.querySelector('.canvas').focus()`);
+      await openHosted(async () => v1Package);
       for (const modifiers of [2, 4]) {
         await page.eval(`document.querySelector('.canvas').focus()`);
         for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70, modifiers });
@@ -920,42 +997,38 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     });
 
     it('works from the keyboard: arrow down into the results, up and down, Enter goes there', async () => {
-      await page.open(url, trace.found);
+      await openHosted(async () => v1Package);
       await typeSearch('Validate');
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
       expect(await page.eval<string>(focused)).toBe('TaskValidate Order SF');
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
       expect(await page.eval<string>(focused)).toBe('NameValidate Order SF');
-      // Its documentation ("Validates the OrderRequest…") is the next row of the group.
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
       expect(await page.eval<string>(focused)).toMatch(/^DocumentationValidates the OrderRequest/);
       await page.pressKey('ArrowUp', 'ArrowUp', 38);
       expect(await page.eval<string>(focused)).toBe('NameValidate Order SF');
       await page.pressEnter();
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id'))`)).toEqual([
-        'bpmnid-ca534cf5-ff40-5898-873c-68c5b8ff5674',
-      ]);
+      expect(await page.eval<string[]>(selected)).toEqual(['bpmnid-ca534cf5-ff40-5898-873c-68c5b8ff5674']);
       await page.pressKey('ArrowUp', 'ArrowUp', 38);
       await page.pressKey('ArrowUp', 'ArrowUp', 38);
       expect(await page.eval<string>(focused)).toBe('input');
     });
 
     it('says when nothing matches, and that one character is not searched', async () => {
-      await page.open(url, trace.found);
+      await openHosted(async () => v1Package);
       await typeSearch('zzqx');
       expect(await page.eval<SearchUi>(searchUi)).toMatchObject({ tab: 'Search (0)', empty: 'No matches for "zzqx"', rows: [] });
       await typeSearch('z');
       expect(await page.eval<string>(`document.querySelector('[aria-labelledby="tab-search"]').textContent`)).toContain('Type at least 2 characters');
-      // From a fresh start, one character opens nothing.
-      await page.open(url, trace.found);
+      await openHosted(async () => v1Package);
       await typeSearch('o');
       expect((await page.eval<SearchUi>(searchUi)).tab).toBeNull();
+      expect(await postedOf('search')).toEqual([]);
     });
 
     it('prints a name holding HTML as text', async () => {
       const bpmn = SUB_BPMN.replace('name="Pick Items"', 'name="&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;Pick &lt;b&gt;Items&lt;/b&gt;"');
-      const r = await plainRender(await readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: bpmn, xsdFiles: {} }));
-      await page.open(url, r);
+      await openHosted(() => readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: bpmn, xsdFiles: {} }));
       await typeSearch('Pick');
       const ui = await page.eval<{ rows: string[]; heads: string[]; imgs: number; bold: number; xss: unknown }>(`({
         rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
@@ -971,92 +1044,147 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     });
 
     it('opens the sub-process a result is in, then selects it there', async () => {
-      await page.open(url, drillRender);
+      await openHosted(() => readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }));
       await typeSearch('Pick Items');
-      await page.eval('window.__posted.length = 0');
       await page.eval(`document.querySelector('.search-row').click()`);
-      expect(await page.eval<unknown[]>(`window.__posted.filter((m) => m.type === 'openCallee')`)).toEqual([{ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] }]);
-      // The host draws the level; the result is selected there and the search runs again on it.
-      const level = await new Promise<RenderMessage>((resolve) => {
-        const renders: RenderMessage[] = [];
-        const s = new ViewerSession({ fileName: 'order.bpmn', load: async () => readProcessPackage({ path: '/work/order.bpmn', format: 'bpmn', bpmnFileName: 'order.bpmn', bpmnText: SUB_BPMN, xsdFiles: {} }), post: (m) => void (m.type === 'render' && renders.push(m)) });
-        void s.handleMessage({ type: 'ready' }).then(() => s.handleMessage({ type: 'openCallee', calleeId: 'sub:prepare', path: ['order'] })).then(() => resolve(renders[renders.length - 1]));
-      });
-      await page.eval(`(async () => { window.postMessage(${JSON.stringify(level)}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
-      const ui = await page.eval<{ selected: string[]; details: string; tab: string; rows: string[] }>(`({
-        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
-        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
+      expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: 'order', below: ['sub:prepare'] }]);
+      await pump();
+      expect(await page.eval<{ selected: string[]; details: string; tab: string; rows: string[] }>(`({
+        selected: ${selected}, details: ${details},
         tab: document.querySelector('.tab.active').textContent,
         rows: [...document.querySelectorAll('.search-row')].map((e) => e.textContent),
-      })`);
-      expect(ui).toEqual({ selected: ['pick'], details: 'Pick Items', tab: 'Search (1)', rows: ['NamePick Items'] });
+      })`)).toEqual({ selected: ['pick'], details: 'Pick Items', tab: 'Search (1)', rows: ['NamePick Items'] });
     });
 
-    it('goes where the match is: a match inside a service opens the service on its step; "Show caller" goes back to the caller', async () => {
-      const renders: RenderMessage[] = [];
-      const s = new ViewerSession({ fileName: 'synthetic.twx', load: () => syntheticTwxPackage(), post: (m) => void (m.type === 'render' && renders.push(m)) });
-      await s.handleMessage({ type: 'ready' });
-      const top = renders[renders.length - 1];
+    it('goes where the match is: a match in a service opens it below its caller on its element; "Show caller" goes back to the caller', async () => {
+      const top = await openHosted(() => syntheticTwxPackage(), { fileName: 'synthetic.twx' });
       const reviewId = Object.values(top.elements).find((e) => e.name === 'Review Order')!.id;
-      /** Posts what the host draws for the webview's last openCallee, and waits for it to be drawn. */
-      const answer = async () => {
-        const posted = await page.eval<Array<{ type: 'openCallee'; calleeId: string; path: string[] }>>(`window.__posted.filter((m) => m.type === 'openCallee')`);
-        expect(posted).toHaveLength(1);
-        await page.eval('window.__posted.length = 0');
-        await s.handleMessage(posted[0]);
-        await page.eval(`(async () => { window.postMessage(${JSON.stringify(renders[renders.length - 1])}, '*'); await new Promise((r) => setTimeout(r, 400)); })()`);
-        return posted[0];
-      };
-      const ui = `({
-        selected: [...document.querySelectorAll('.djs-element.selected')].map((e) => e.getAttribute('data-element-id')),
-        details: document.querySelector('[aria-labelledby="tab-details"] h2').textContent,
-        crumbs: document.querySelector('.crumbs').hidden ? [] : [...document.querySelectorAll('.crumbs li')].map((e) => e.textContent),
-        tab: document.querySelector('.tab.active').textContent,
-      })`;
       type Ui = { selected: string[]; details: string; crumbs: string[]; tab: string };
+      const ui = `({ selected: ${selected}, details: ${details}, crumbs: ${crumbsText}, tab: document.querySelector('.tab.active').textContent })`;
 
-      await page.open(url, top);
       await typeSearch('Compute Total');
-      // The head says where its rows go.
-      expect(await page.eval<string[]>(`[...document.querySelectorAll('.search-inside')].map((e) => e.textContent)`)).toEqual(['↳ Inside service:Price Order › called by Review Order']);
-      await page.eval('window.__posted.length = 0');
-      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'StepCompute Total').click()`);
-      expect(await answer()).toEqual({ type: 'openCallee', calleeId: PRICE_SERVICE_ID, path: [BPD_ID] });
-      const level = renders[renders.length - 1];
-      const stepId = Object.values(level.elements).find((e) => e.originalId === 'svc:script' || e.id === 'svc:script')!.id;
-      expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [stepId], details: 'Compute Total', crumbs: ['Synthetic Order', 'Price Order'], tab: expect.stringMatching(/^Search \(/) });
+      expect((await page.eval<SearchUi>(searchUi)).objects).toEqual([['Service flow: Price Order', true]]);
+      expect(await page.eval<string>(`document.querySelector('.search-called-by').textContent`)).toBe(' · called by Review Order');
+      await clickResult('.search-row', 'NameCompute Total');
+      expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: top.rootProcessId, below: [PRICE_SERVICE_ID] }]);
+      await pump();
+      const level = await page.eval<Ui>(ui);
+      expect(level).toMatchObject({ details: 'Compute Total', crumbs: ['Synthetic Order', 'Price Order'], tab: expect.stringMatching(/^Search \(/) });
+      expect(level.selected).toHaveLength(1);
 
       // "Show caller": back on the process, the calling activity selected.
       await page.clickButton('Show caller');
-      expect(await answer()).toEqual({ type: 'openCallee', calleeId: BPD_ID, path: [] });
+      await pump();
       expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [reviewId], details: 'Review Order', crumbs: [] });
 
-      // The head of the group: the service with nothing selected, its summary in Details.
-      await page.eval(`document.querySelector('.search-inside').click()`);
-      await answer();
+      // The service's own group: its diagram with nothing selected, its summary in Details.
+      await typeSearch('Price Order');
+      await clickResult('.search-head', 'Service flowPrice Order');
+      await pump();
       expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [], details: 'Price Order', crumbs: ['Synthetic Order', 'Price Order'] });
       // The breadcrumb leads back.
       await page.clickButton('Synthetic Order');
-      await answer();
+      await pump();
       expect((await page.eval<Ui>(ui)).crumbs).toEqual([]);
 
       // A match in the activity's own fields stays on the level.
       await typeSearch('Review Order');
-      await page.eval(`[...document.querySelectorAll('.search-row')].find((b) => b.textContent === 'NameReview Order').click()`);
-      expect(await page.eval<unknown[]>(`window.__posted.filter((m) => m.type === 'openCallee')`)).toEqual([]);
+      await clickResult('.search-row', 'NameReview Order');
+      expect(await postedOf('showLevel')).toEqual([]);
       expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [reviewId], details: 'Review Order' });
       expect(await page.eval<string[]>('window.__errors')).toEqual([]);
+    }, 30_000);
+
+    it('switches to another process of the file for a match there, and selects it', async () => {
+      const { pkg, otherId } = await twoProcesses();
+      await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
+      await typeSearch('Approved');
+      expect((await page.eval<SearchUi>(searchUi)).objects).toEqual([
+        ['Process: Synthetic Order', true],
+        ['Process: Second Order', true],
+      ]);
+      await clickResult('.search-row', 'NameApproved twice?');
+      expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: otherId, below: [] }]);
+      await pump();
+      const after = await page.eval<{ picker: string; details: string; selected: number; first: string }>(`({
+        picker: document.querySelector('.process-select').selectedOptions[0].textContent,
+        details: ${details},
+        selected: document.querySelectorAll('.djs-element.selected').length,
+        first: document.querySelector('.search-object-name').textContent,
+      })`);
+      // The search runs again with the other process shown: it comes first now.
+      expect(after).toEqual({ picker: 'Second Order', details: 'Approved twice?', selected: 1, first: 'Process: Second Order' });
+    });
+
+    it('opens a service no process calls as a root level of its own, with the file in the breadcrumb', async () => {
+      await openHosted(() => syntheticTwxPackage(), { fileName: 'synthetic.twx' });
+      await typeSearch('Apply Discount');
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.search-called-by')].map((e) => e.textContent)`)).toContain(' · not called by a process');
+      await clickResult('.search-head', 'Service flowApply Discount');
+      expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', serviceId: DISCOUNT_SERVICE_ID, below: [] }]);
+      await pump();
+      expect(await page.eval<{ crumbs: string[]; details: string; back: boolean }>(`({ crumbs: ${crumbsText}, details: ${details}, back: !document.querySelector('.crumbs button').hidden })`)).toEqual({
+        crumbs: ['synthetic.twx', 'Service: Apply Discount'],
+        details: 'Apply Discount',
+        back: true,
+      });
+      // The file leads back to the chosen process.
+      await page.clickButton('synthetic.twx');
+      await pump();
+      expect(await page.eval<string[]>(crumbsText)).toEqual([]);
+      expect(await page.eval<string>(`document.querySelector('.toolbar .title').textContent`)).toBe('Synthetic Order');
+    });
+
+    it('filters to the shown process, and remembers the choice', async () => {
+      const { pkg } = await twoProcesses();
+      await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
+      await typeSearch('Approved');
+      expect((await page.eval<SearchUi>(searchUi)).objects).toHaveLength(2);
+      await page.eval(`(() => { const s = document.querySelector('.search-scope'); s.value = 'shown'; s.dispatchEvent(new Event('change')); })()`);
+      expect(await postedOf('search')).toMatchObject([{ scope: 'shown', query: 'Approved' }]);
+      await pump();
+      const ui = await page.eval<SearchUi>(searchUi);
+      expect(ui.objects).toEqual([['Process: Synthetic Order', true]]);
+      expect(ui.state).toMatchObject({ searchScope: 'shown' });
+      // A rebuilt webview starts with it.
+      await openHosted(async () => pkg, { fileName: 'synthetic.twx', query: `?state=${encodeURIComponent(JSON.stringify({ search: 'Approved', searchScope: 'shown', tab: 'search' }))}` });
+      expect(await page.eval<string>(`document.querySelector('.search-scope').value`)).toBe('shown');
+      expect((await page.eval<SearchUi>(searchUi)).objects).toEqual([['Process: Synthetic Order', true]]);
+    });
+
+    it('folds objects: all open up to 10, the rest folded; a fold is kept on a re-render; folded rows are skipped by the keys', async () => {
+      const pkg = await syntheticTwxPackage();
+      for (let i = 1; i <= 11; i++) pkg.processes.push({ ...pkg.processes[0], id: `copy-${i}`, name: `Copy ${String(i).padStart(2, '0')}` });
+      await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
+      await typeSearch('Review Order');
+      const objects = (await page.eval<SearchUi>(searchUi)).objects.filter(([name]) => name.startsWith('Process: '));
+      expect(objects).toHaveLength(12);
+      expect(objects[0]).toEqual(['Process: Synthetic Order', true]);
+      expect(objects.slice(0, 10).every(([, open]) => open)).toBe(true);
+      expect(objects.slice(10).every(([, open]) => !open)).toBe(true);
+      // Fold the first one: the keys start on the second object now.
+      await page.eval(`document.querySelector('.search-object > summary').click()`);
+      expect((await page.eval<SearchUi>(searchUi)).objects[0]).toEqual(['Process: Synthetic Order', false]);
+      await page.eval(`document.querySelector('.search-input').focus()`);
+      await page.pressKey('ArrowDown', 'ArrowDown', 40);
+      expect(await page.eval<string>(`document.activeElement.closest('.search-object').querySelector('.search-object-name').textContent`)).toBe('Process: Copy 01');
+      // A live refresh runs the search again; the fold stays.
+      host!.s.fileChanged();
+      await new Promise((r) => setTimeout(r, 400));
+      await host!.s.idle;
+      await pump();
+      expect((await page.eval<SearchUi>(searchUi)).objects[0]).toEqual(['Process: Synthetic Order', false]);
     });
 
     it('keeps the query in the webview state and searches again after a rebuild and a re-render', async () => {
-      await page.open(`${url}?state=${encodeURIComponent(JSON.stringify({ tab: 'search', search: 'EXCEPTION' }))}`, trace.found);
-      const first = await page.eval<SearchUi & { value: string }>(`({ ...${searchUi}, value: document.querySelector('.search-input').value })`);
-      expect(first.value).toBe('EXCEPTION');
-      expect(first.active).toBe(first.tab);
-      expect(first.rows.length).toBeGreaterThan(1);
-      // A live refresh (another render of the same level) runs the search again.
-      await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...trace.found, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
-      expect((await page.eval<SearchUi>(searchUi)).rows).toEqual(first.rows);
+      const first = await openHosted(async () => v1Package, { query: `?state=${encodeURIComponent(JSON.stringify({ tab: 'search', search: 'EXCEPTION' }))}` });
+      const ui = await page.eval<SearchUi & { value: string }>(`({ ...${searchUi}, value: document.querySelector('.search-input').value })`);
+      expect(ui.value).toBe('EXCEPTION');
+      expect(ui.active).toBe(ui.tab);
+      expect(ui.rows.length).toBeGreaterThan(1);
+      await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...first, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
+      await pump();
+      expect((await page.eval<SearchUi>(searchUi)).rows).toEqual(ui.rows);
     });
   });
 });

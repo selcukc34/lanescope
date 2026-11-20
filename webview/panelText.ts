@@ -184,7 +184,7 @@ export function notCheckedText(headings: readonly string[]): string {
   return `${headings.length} ${headings.length === 1 ? 'section' : 'sections'} not checked: ${headings.join(', ')}`;
 }
 
-/** "Search (3)": the groups with a hit; just "Search" while the query is too short. */
-export function searchTabTitle(result: Pick<SearchResult, 'tooShort' | 'groups'>): string {
-  return result.tooShort ? 'Search' : `Search (${result.groups.length})`;
+/** "Search (3)": the elements with a listed hit; just "Search" while the query is too short. */
+export function searchTabTitle(result: Pick<SearchResult, 'tooShort' | 'groupCount'>): string {
+  return result.tooShort ? 'Search' : `Search (${result.groupCount})`;
 }

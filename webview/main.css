@@ -997,3 +997,63 @@ table.grid td {
   background: var(--vscode-textLink-foreground);
   color: var(--vscode-editor-background);
 }
+
+.search-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.search-scope {
+  padding: 1px 4px;
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  font: inherit;
+}
+
+.search-object {
+  margin: 0 0 8px;
+}
+
+.search-object > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.search-object > summary .search-called-by {
+  font-weight: normal;
+}
+
+.search-object.shown > summary .search-object-name {
+  color: var(--vscode-textLink-foreground);
+}
+
+.search-object > .search-group {
+  margin-left: 12px;
+}
+
+.search-caller-anchor {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.search-callers {
+  list-style: none;
+  margin: 2px 0 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, transparent));
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+}
+
+.search-callers[hidden] {
+  display: none;
+}

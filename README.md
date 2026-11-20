@@ -50,7 +50,7 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
 | **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **Open Process Description** (**New Process Description** while `<name>-description.md` is not there yet) and **Clear Description Check**. |
-| **Search…** | Finds a word anywhere in the shown process (see [Search](#search)). **Cmd/Ctrl+F** focuses it, **Escape** clears it. |
+| **Search…** | Finds a word anywhere in the open file (see [Search](#search)). **Cmd/Ctrl+F** focuses it, **Escape** clears it. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
@@ -327,25 +327,22 @@ The comparison, the warnings and the exports are not affected by the check.
 
 ## Search
 
-The **Search…** box in the toolbar lists every place a word appears in the shown process, in the **Search (N)** tab (N: the elements with a match). It is a plain, case-insensitive substring search of at least 2 characters, run locally as you type: no regular expressions, no AI, no network. The Turkish **İ** and **ı** match **i** and **I**.
+The **Search…** box in the toolbar lists every place a word appears in the **open file**, in the **Search (N)** tab (N: the elements with a match). It is a plain, case-insensitive substring search of at least 2 characters, run locally: no regular expressions, no AI, no network. The Turkish **İ** and **ı** match **i** and **I**. **Cmd/Ctrl+F** focuses the box, **Escape** clears it.
 
-What is searched (when the file has it; Bob output has names, documentation, lanes, conditions, parameters and business objects; a `.twx` has the rest as well):
+What is searched:
 
-- **Nodes:** name, documentation, lane, performer, what a call activity calls, its input and output mappings (parameter and expression, or "not mapped"), user task settings (assignment, priority, due date, subject), timer settings, script task code.
-- **Flows:** name and condition. The result is the flow itself.
-- **Inside called services** (one level, as the details panel shows it): step names, scripts, calls and their mappings, REST services and operations, gateway conditions, error boundaries, coach controls, their types and bindings, and the service's variables, inputs and outputs.
-- **Sub-processes:** the nodes and flows inside them, shown with the sub-process they are in.
-- **Data:** the process's variables, inputs and outputs, and the business objects and their fields (the XSD of Bob output included).
+- **A `.twx` export:** every BPD (with the nodes inside its sub-processes), every service of the app (service flows, client-side human services and the rest, whether a process calls them or not; a service is searched in its diagram, as Lanescope draws it when it is opened), every business object and its fields. Packed toolkits (`toolkits/*.zip`) are not searched; the tab says "Toolkits are not searched."
+- **Bob output (`.bpmn` or `.zip`):** every process in it and every business object of the XSD.
 
-Matches are listed per element, names first, then in diagram order, each with the field it is in and the text around it; at most 500 are listed ("Showing first 500 matches"). The inside of a called service is a group of its own, **↳ Inside service: &lt;service&gt;**, with the activity that calls it.
+In each of them: node names, documentation, lanes, performers, what a call calls, input and output mappings (parameter and expression, or "not mapped"), user task and timer settings, script code, REST services and operations, coach controls, their types and bindings, flow names and conditions, and variables, inputs and outputs. With `lanescope.showScripts` off, script code is not searched at all and the tab says "Scripts were not searched because lanescope.showScripts is off."
 
-A result goes where the word is: a match in an element's own fields (name, documentation, lane, mappings, what it calls, settings, condition) selects that element on its level (a sub-process level is opened first), and a match inside a called service opens the service as a diagram and selects the step (just the service, with its summary in Details, for a service variable); **Show caller** on such a row selects the calling activity instead, and the breadcrumb leads back. Click a row, or press **↓** in the box, then **↑**/**↓** and **Enter**. Details is updated and the Search tab stays open. The diagram is not marked otherwise.
+Results are grouped by object (**◆ Process: …**, **⚙ Service flow: …**, **▤ Business object: …**, each with its number of matches; a service also names the activities that call it), then by element, names first, then in diagram order, each row with the field it is in and the text around it. The object shown now comes first; objects can be folded (more than 10: the first 10 are open). The header says "N matches in M objects"; at most 500 matches are listed ("Showing first 500 matches"). **All file** / **Shown process** above the list limits the search to the diagram shown; the choice is kept per editor.
+
+A result goes where the word is. A match in a process selects the element there: Lanescope switches to that process and opens the sub-process it is in when needed. A match in a service opens the service's diagram below the first activity that calls it (or on its own, "&lt;file&gt; › Service: X", when no process calls it) and selects the element; **Show caller** selects the calling activity instead (a small menu when there are several), and the breadcrumb leads back. A business object match opens the Data tab on it. Click a row, or press **↓** in the box, then **↑**/**↓** and **Enter**. The Search tab stays open and the diagram is not marked otherwise.
 
 Revealing an element (a row of the Search, Changes or Trace tab, or the selection brought back when you return to a level) never recentres the diagram: an element already in view stays where it is, and one out of view is moved in by as little as needed, at the same zoom. A newly opened level is fitted to the window first.
 
-With `lanescope.showScripts` off, script code is not searched at all (it never reaches the diagram view) and the tab says "Scripts were not searched because lanescope.showScripts is off."
-
-Scope: the process shown (the one chosen in the toolbar for a `.twx`, whatever level is drawn), its sub-processes and the inside of the services it calls. Other processes of the file are not searched ("Only the shown process is searched."). The query is kept per editor and runs again after a live refresh or a toggle. Exports are not affected.
+The index is built in the extension the first time you search, and again after the file changes or `lanescope.showScripts` does; only the results go to the diagram view. The query runs again after a live refresh or a toggle. Exports are not affected.
 
 ## Settings
 

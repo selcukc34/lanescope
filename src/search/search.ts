@@ -1,68 +1,80 @@
 // Keyword search over a search index (./searchIndex): a plain, case-folded
-// substring match, no regular expressions. Pure and free of the model's
-// readers, so the webview bundles it and searches as the user types; the
-// index is built on the host and sent with every render.
+// substring match, no regular expressions. Pure: the host keeps the index of
+// the open file and answers the webview's queries with it (src/views).
 
-/** What a result selects in the viewer. */
+/** One object of the file a result belongs to: a process, a service or a business object. */
+export interface SearchObject {
+  kind: 'process' | 'service' | 'dataType';
+  /** What it is, as shown: "Process", "Service flow", "Client-side human service", "Business object", ... */
+  label: string;
+  name: string;
+  /** process: the process id of the package; service: its object id ("1.…"); dataType: its name. */
+  id: string;
+  /** Services: the activities of the file's processes that call it. */
+  calledBy?: SearchCaller[];
+  /** Services: true when it opens as a diagram. */
+  openable?: boolean;
+}
+
+/** An activity of a process that calls a service. */
+export interface SearchCaller {
+  /** Id of the process (in the package) that holds it. */
+  processId: string;
+  processName: string;
+  /** Sub-process levels of the process around the activity, outermost first. */
+  levels: string[];
+  /** Diagram id of the activity. */
+  nodeId: string;
+  name: string;
+}
+
+/** What a result selects, inside its object. */
 export type SearchTarget =
-  /** A node of the chosen process; `levels` are the sub-process levels to open first, outermost first. */
+  /** A node; `levels` are the sub-process levels to open below the object's diagram, outermost first. */
   | { type: 'node'; id: string; levels: string[] }
-  /** A sequence flow of the chosen process; `levels` as for a node. */
+  /** A sequence flow; `levels` as for a node. */
   | { type: 'flow'; id: string; levels: string[] }
-  /** The chosen process itself (its details: variables, inputs, outputs). */
-  | { type: 'process' }
-  /** A business object of the package (the Data tab). */
+  /** The object's diagram itself: nothing selected, its summary in Details. */
+  | { type: 'root' }
+  /** A business object (the Data tab). */
   | { type: 'dataType'; name: string };
 
-/**
- * One result group: an element of the process and where it is, or the
- * inside of a service an activity calls.
- */
+/** One result group: an element of an object and where it is. */
 export interface SearchGroup {
-  /** The element of the chosen process; for the inside of a service, the activity that calls it. */
+  /** Index into SearchIndex.objects. */
+  object: number;
   target: SearchTarget;
-  /** "Call activity", "Sequence flow", "Process", "Business object", "Inside service", ... */
+  /** "Call activity", "Sequence flow", "Process", "Business object", ... */
   kind: string;
-  /** The element's name; for the inside of a service, the service's name. */
   name: string;
   /** The enclosing sub-processes of the target, outermost first. */
   where: string[];
-  /** The inside of a service: the name of the activity that calls it. */
-  caller?: string;
-  /** The inside of a service that opens as a diagram: its level (no step). */
-  open?: SearchOpen;
-}
-
-/** A diagram level a field can open: a called service, and the step of it to select. */
-export interface SearchOpen {
-  /** Level id to open from the level of the group's target (a service, "1.…"). */
-  levelId: string;
-  /** Id of the step in that service, as the source writes it (the drawn element's id or originalId). */
-  stepId?: string;
 }
 
 /** One searchable text of a group. */
 export interface SearchField {
   /** Index into SearchIndex.groups. */
   group: number;
-  /** What the text is, e.g. "Name", "Condition", "Script", "Step \"Init\" · Script". */
+  /** What the text is, e.g. "Name", "Condition", "Script", "Input mapping". */
   label: string;
   text: string;
   /** True for the group's own name: such hits sort first. */
   isName?: true;
-  /** Inside a called service that opens as a diagram: the service and the step to select there. */
-  open?: SearchOpen;
+  /** A field of a business object: its name, to show it in the Data tab. */
+  dataField?: string;
 }
 
-/** Everything that can be searched in the shown process, built by buildSearchIndex. */
+/** Everything that can be searched in the open file, built by buildSearchIndex. */
 export interface SearchIndex {
-  /** In diagram order. */
+  /** Processes, then services, then business objects, each by name. */
+  objects: SearchObject[];
+  /** By object, in diagram order. */
   groups: SearchGroup[];
   fields: SearchField[];
   /** Script texts left out because lanescope.showScripts is off (0 when it is on). */
   scriptsOmitted: number;
-  /** The package holds other processes, which are not searched. */
-  otherProcesses: boolean;
+  /** The file packs toolkits, which are not searched. */
+  toolkitsNotSearched: boolean;
 }
 
 /** One occurrence of the query, with up to SNIPPET_CONTEXT characters around it. */
@@ -74,7 +86,7 @@ export interface SearchHit {
   match: string;
   /** Text after the match, "…" last when cut. */
   after: string;
-  open?: SearchOpen;
+  dataField?: string;
 }
 
 export interface SearchResultGroup {
@@ -82,24 +94,50 @@ export interface SearchResultGroup {
   hits: SearchHit[];
 }
 
+export interface SearchResultObject {
+  object: SearchObject;
+  /** The object the viewer shows (listed first). */
+  shown: boolean;
+  /** Hits listed for this object. */
+  hitCount: number;
+  groups: SearchResultGroup[];
+}
+
+/** Which objects a search looks at. */
+export type SearchScope = 'file' | 'shown';
+
 export interface SearchResult {
   /** The query as searched (trimmed). */
   query: string;
+  scope: SearchScope;
   /** The query is shorter than MIN_QUERY_LENGTH: nothing was searched. */
   tooShort: boolean;
-  groups: SearchResultGroup[];
+  /** The shown object first, then the others in index order. */
+  objects: SearchResultObject[];
+  /** Groups (elements) with a listed hit: the N of "Search (N)". */
+  groupCount: number;
   /** Hits listed (at most MAX_HITS). */
   shown: number;
   /** Every hit, also those past MAX_HITS. */
   total: number;
   /** More than MAX_HITS hits: only the first are listed. */
   truncated: boolean;
+  scriptsOmitted: number;
+  toolkitsNotSearched: boolean;
+}
+
+export interface SearchOptions {
+  scope: SearchScope;
+  /** Index into SearchIndex.objects of the object the viewer shows; none when undefined. */
+  shownObject?: number;
 }
 
 export const MIN_QUERY_LENGTH = 2;
 export const MAX_HITS = 500;
 /** Characters shown on each side of a match. */
 export const SNIPPET_CONTEXT = 40;
+/** Longest query accepted. */
+export const MAX_QUERY_LENGTH = 500;
 
 /**
  * Case folding that keeps every UTF-16 unit in its place (so a match in the
@@ -122,24 +160,44 @@ export function foldCase(text: string): string {
   return out;
 }
 
+/** The index of an object in `index.objects`, or undefined. */
+export function findObject(index: SearchIndex, kind: SearchObject['kind'], id: string): number | undefined {
+  const at = index.objects.findIndex((o) => o.kind === kind && o.id === id);
+  return at >= 0 ? at : undefined;
+}
+
 /**
  * Every occurrence of `query` in the index: case-insensitive, plain
  * substring, trimmed; nothing for a query shorter than MIN_QUERY_LENGTH.
- * Groups with a hit in their name come first, the rest in diagram order;
+ * The shown object comes first, the others in index order; inside an object,
+ * groups with a hit in their name come first, the rest in diagram order;
  * hits keep the order of the fields. At most MAX_HITS hits are listed.
+ * With scope "shown", only the shown object is searched.
  */
-export function search(index: SearchIndex, rawQuery: string): SearchResult {
-  const query = rawQuery.trim();
-  const empty: SearchResult = { query, tooShort: query.length < MIN_QUERY_LENGTH, groups: [], shown: 0, total: 0, truncated: false };
-  if (empty.tooShort) return empty;
+export function search(index: SearchIndex, rawQuery: string, options: SearchOptions = { scope: 'file' }): SearchResult {
+  const query = rawQuery.trim().slice(0, MAX_QUERY_LENGTH);
+  const result: SearchResult = {
+    query,
+    scope: options.scope,
+    tooShort: query.length < MIN_QUERY_LENGTH,
+    objects: [],
+    groupCount: 0,
+    shown: 0,
+    total: 0,
+    truncated: false,
+    scriptsOmitted: index.scriptsOmitted,
+    toolkitsNotSearched: index.toolkitsNotSearched,
+  };
+  if (result.tooShort) return result;
   const needle = foldCase(query);
+  const inScope = (object: number) => options.scope === 'file' || object === options.shownObject;
 
   const hitsByGroup = new Map<number, { hits: SearchHit[]; nameHit: boolean }>();
-  let total = 0;
   for (const field of index.fields) {
+    if (!inScope(index.groups[field.group].object)) continue;
     const folded = foldCase(field.text);
     for (let at = folded.indexOf(needle); at >= 0; at = folded.indexOf(needle, at + needle.length)) {
-      total++;
+      result.total++;
       let entry = hitsByGroup.get(field.group);
       if (!entry) {
         entry = { hits: [], nameHit: false };
@@ -150,19 +208,29 @@ export function search(index: SearchIndex, rawQuery: string): SearchResult {
     }
   }
 
+  const objectRank = (o: number) => (o === options.shownObject ? -1 : o);
   const order = [...hitsByGroup.keys()].sort((a, b) => {
+    const byObject = objectRank(index.groups[a].object) - objectRank(index.groups[b].object);
+    if (byObject !== 0) return byObject;
     const nameFirst = Number(hitsByGroup.get(b)!.nameHit) - Number(hitsByGroup.get(a)!.nameHit);
     return nameFirst !== 0 ? nameFirst : a - b;
   });
-  const groups: SearchResultGroup[] = [];
-  let shown = 0;
+  let last: SearchResultObject | undefined;
   for (const g of order) {
-    if (shown >= MAX_HITS) break;
-    const hits = hitsByGroup.get(g)!.hits.slice(0, MAX_HITS - shown);
-    shown += hits.length;
-    groups.push({ group: index.groups[g], hits });
+    if (result.shown >= MAX_HITS) break;
+    const group = index.groups[g];
+    const hits = hitsByGroup.get(g)!.hits.slice(0, MAX_HITS - result.shown);
+    result.shown += hits.length;
+    result.groupCount++;
+    if (!last || last.object !== index.objects[group.object]) {
+      last = { object: index.objects[group.object], shown: group.object === options.shownObject, hitCount: 0, groups: [] };
+      result.objects.push(last);
+    }
+    last.hitCount += hits.length;
+    last.groups.push({ group, hits });
   }
-  return { query, tooShort: false, groups, shown, total, truncated: total > shown };
+  result.truncated = result.total > result.shown;
+  return result;
 }
 
 function hit(field: SearchField, at: number, length: number): SearchHit {
@@ -175,17 +243,23 @@ function hit(field: SearchField, at: number, length: number): SearchHit {
     before: (from > 0 ? '…' : '') + collapse(text.slice(from, at)).trimStart(),
     match: text.slice(at, at + length),
     after: collapse(text.slice(at + length, to)).trimEnd() + (to < text.length ? '…' : ''),
-    ...(field.open ? { open: field.open } : {}),
+    ...(field.dataField !== undefined ? { dataField: field.dataField } : {}),
   };
 }
 
 /** "Showing first 500 matches" when the list is cut; undefined otherwise. */
-export function truncatedNote(result: SearchResult): string | undefined {
+export function truncatedNote(result: Pick<SearchResult, 'truncated'>): string | undefined {
   return result.truncated ? `Showing first ${MAX_HITS} matches` : undefined;
+}
+
+/** "12 matches in 3 objects". */
+export function matchesSummary(result: Pick<SearchResult, 'shown' | 'objects'>): string {
+  const m = result.objects.length;
+  return `${result.shown} ${result.shown === 1 ? 'match' : 'matches'} in ${m} ${m === 1 ? 'object' : 'objects'}`;
 }
 
 /** The note above the results while lanescope.showScripts keeps scripts out of the index. */
 export const SCRIPTS_NOT_SEARCHED = 'Scripts were not searched because lanescope.showScripts is off.';
 
-/** The note below the results when the package holds other processes. */
-export const ONLY_SHOWN_PROCESS = 'Only the shown process is searched.';
+/** The note below the results when the file packs toolkits. */
+export const TOOLKITS_NOT_SEARCHED = 'Toolkits are not searched.';

@@ -24,7 +24,19 @@ import type {
   VariableDetails,
 } from '../src/views/protocol';
 import type { DataType } from '../src/model/model';
-import { ONLY_SHOWN_PROCESS, SCRIPTS_NOT_SEARCHED, truncatedNote, type SearchHit, type SearchIndex, type SearchOpen, type SearchResult, type SearchResultGroup, type SearchTarget } from '../src/search/search';
+import {
+  matchesSummary,
+  SCRIPTS_NOT_SEARCHED,
+  TOOLKITS_NOT_SEARCHED,
+  truncatedNote,
+  type SearchCaller,
+  type SearchHit,
+  type SearchObject,
+  type SearchResult,
+  type SearchResultGroup,
+  type SearchResultObject,
+  type SearchScope,
+} from '../src/search/search';
 import type { TraceRow, TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import {
@@ -68,17 +80,18 @@ export interface ChangesActions {
   revealTrace(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void;
   /** Stop checking against the description. */
   clearDescription(): void;
-  /** Select what a search result points at (opening its level first); with `open`, the step of a called service. */
-  revealSearch(target: SearchTarget, open?: SearchOpen): void;
+  /** Go where a search match is (another process, a service, a sub-process level, the Data tab). */
+  revealSearch(object: SearchObject, target: SearchResultGroup['group']['target'], dataField?: string): void;
+  /** Select an activity that calls a service, in its process. */
+  showCaller(caller: SearchCaller): void;
   /** Arrow up from the first search result: back to the search box. */
   focusSearchBox(): void;
+  /** The All file / Shown process choice changed. */
+  searchScopeChanged(scope: SearchScope): void;
 }
 
-/** What the Search tab lists: a search of the render's index. */
-export interface SearchView {
-  result: SearchResult;
-  index: SearchIndex;
-}
+/** Objects of a search result shown open; the rest start folded. */
+export const OPEN_SEARCH_OBJECTS = 10;
 
 /** Types that have a row in the Data tab, and how to show one there. */
 interface RevealType {
@@ -104,6 +117,7 @@ export class SidePanel {
   private active: TabId = 'details';
   private data: RenderMessage | undefined;
   private selectedId: string | undefined;
+  private readonly scopeSelect: HTMLSelectElement;
 
   constructor(
     private readonly onTabChange: (tab: TabId) => void,
@@ -112,7 +126,17 @@ export class SidePanel {
     private readonly changes: ChangesActions,
     /** The tab shown first, e.g. the one saved before the webview was hidden; not reported to onTabChange. */
     initialTab: TabId = 'details',
+    /** The All file / Shown process choice the Search tab starts with. */
+    searchScope: SearchScope = 'file',
   ) {
+    this.scopeSelect = h(
+      'select',
+      { class: 'search-scope', title: 'What the search looks at', 'aria-label': 'What the search looks at' },
+      h('option', { value: 'file' }, 'All file'),
+      h('option', { value: 'shown' }, 'Shown process'),
+    );
+    this.scopeSelect.value = searchScope;
+    this.scopeSelect.addEventListener('change', () => this.changes.searchScopeChanged(this.searchScope));
     const tabBar = h('div', { class: 'tabs', role: 'tablist' });
     const bodies = h('div', { class: 'tab-bodies' });
     for (const [id, label] of [
@@ -193,9 +217,14 @@ export class SidePanel {
     body.append(details ? renderElement(details, ctx) : renderProcess(this.data.process, types));
   }
 
-  /** Shows a business object in the Data tab. */
-  showType(name: string): void {
-    this.revealType(name);
+  /** Shows a business object in the Data tab, and one of its fields when given. */
+  showType(name: string, field?: string): void {
+    this.revealType(name, field);
+  }
+
+  /** What the search looks at, as chosen in the Search tab. */
+  get searchScope(): SearchScope {
+    return this.scopeSelect.value === 'shown' ? 'shown' : 'file';
   }
 
   /** True while the Search tab is there (a search is on). */
@@ -204,30 +233,43 @@ export class SidePanel {
   }
 
   /**
-   * The Search tab: the results of `view`, or no tab at all when undefined
-   * (the search box was cleared). Matches are set as text, never as HTML.
+   * The Search tab: the result of a search of the open file, or no tab at
+   * all when undefined (the search box was cleared). Matches are set as
+   * text, never as HTML.
    */
-  setSearch(view: SearchView | undefined): void {
+  setSearch(result: SearchResult | undefined): void {
     const { button, body } = this.tabs.get('search')!;
-    button.hidden = view === undefined;
+    button.hidden = result === undefined;
+    // Folded objects stay folded while the same query is shown again (a reload, a toggle).
+    const folded = new Set(
+      [...body.querySelectorAll<HTMLDetailsElement>('details.search-object')].filter((d) => !d.open).map((d) => d.dataset.key ?? ''),
+    );
+    const sameQuery = body.dataset.query === result?.query;
     clear(body);
-    if (!view) {
+    if (!result) {
       if (this.active === 'search') this.showTab('details');
       return;
     }
-    const { result, index } = view;
+    body.dataset.query = result.query;
     button.textContent = searchTabTitle(result);
-    if (index.scriptsOmitted > 0) body.append(h('p', { class: 'hint search-note' }, SCRIPTS_NOT_SEARCHED));
+    const head = h('div', { class: 'search-top' }, this.scopeSelect);
+    if (!result.tooShort && result.objects.length > 0) head.append(h('span', { class: 'muted search-summary' }, matchesSummary(result)));
+    body.append(head);
+    if (result.scriptsOmitted > 0) body.append(h('p', { class: 'hint search-note' }, SCRIPTS_NOT_SEARCHED));
     if (result.tooShort) {
       body.append(h('p', { class: 'empty' }, 'Type at least 2 characters to search.'));
-    } else if (result.groups.length === 0) {
+    } else if (result.objects.length === 0) {
       body.append(h('p', { class: 'empty search-empty' }, `No matches for "${result.query}"`));
     } else {
-      body.append(...result.groups.map((g) => this.searchGroup(g)));
+      result.objects.forEach((o, i) => {
+        const key = `${o.object.kind}:${o.object.id}`;
+        const open = sameQuery ? !folded.has(key) : o.shown || i < OPEN_SEARCH_OBJECTS;
+        body.append(this.searchObject(o, key, open));
+      });
       const cut = truncatedNote(result);
       if (cut) body.append(h('p', { class: 'hint search-note' }, cut));
     }
-    if (index.otherProcesses) body.append(h('p', { class: 'hint search-note' }, ONLY_SHOWN_PROCESS));
+    if (result.toolkitsNotSearched) body.append(h('p', { class: 'hint search-note' }, TOOLKITS_NOT_SEARCHED));
   }
 
   /** Focuses the first result (arrow down from the search box); false when there is none. */
@@ -239,8 +281,11 @@ export class SidePanel {
     return true;
   }
 
+  /** The results that can take the focus: those of folded objects are skipped. */
   private searchNav(): HTMLButtonElement[] {
-    return [...this.tabs.get('search')!.body.querySelectorAll<HTMLButtonElement>('.search-nav')];
+    return [...this.tabs.get('search')!.body.querySelectorAll<HTMLButtonElement>('.search-nav')].filter(
+      (b) => b.closest('details:not([open])') === null,
+    );
   }
 
   /** Arrow up and down move through the results; up from the first goes back to the search box. */
@@ -254,67 +299,96 @@ export class SidePanel {
     else nav[Math.min(nav.length - 1, Math.max(0, index + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
   }
 
-  /**
-   * A group: its element (kind, name, where it is) and one row per hit. The
-   * inside of a service is marked as such: its rows open the service.
-   */
-  private searchGroup(g: SearchResultGroup): HTMLElement {
+  /** An object of the file ("Process: X", "Service flow: Y"), its hit count and its groups; folds. */
+  private searchObject(o: SearchResultObject, key: string, open: boolean): HTMLElement {
+    const { object } = o;
+    const callers = object.calledBy;
+    const calledBy =
+      callers === undefined ? null : h('span', { class: 'muted search-called-by' }, callers.length > 0 ? ` · called by ${callers.map((c) => c.name).join(', ')}` : ' · not called by a process');
+    const details = h(
+      'details',
+      { class: `search-object search-${object.kind}${o.shown ? ' shown' : ''}`, 'data-key': key },
+      h(
+        'summary',
+        { title: o.shown ? 'The diagram shown now' : '' },
+        h('span', { class: 'search-object-icon', 'aria-hidden': 'true' }, OBJECT_ICONS[object.kind]),
+        h('span', { class: 'search-object-name' }, `${object.label}: ${object.name || '(unnamed)'}`),
+        h('span', { class: 'count-badge' }, String(o.hitCount)),
+        calledBy,
+      ),
+      ...o.groups.map((g) => this.searchGroup(object, g)),
+    );
+    details.open = open;
+    return details;
+  }
+
+  /** A group: its element (kind, name, where it is) and one row per hit. */
+  private searchGroup(object: SearchObject, g: SearchResultGroup): HTMLElement {
     const { group } = g;
-    const inside = group.caller !== undefined;
-    const where = [...group.where, ...(inside ? [`called by ${group.caller}`] : [])];
     const head = h(
       'button',
-      {
-        class: `link search-head search-nav${inside ? ' search-inside' : ''}`,
-        type: 'button',
-        title: inside
-          ? group.open
-            ? 'Open the called service as a diagram'
-            : 'Select the activity that calls this service (the service cannot be opened as a diagram)'
-          : 'Select in the diagram and show its details',
-      },
-      h('span', { class: `badge kind${inside ? ' inside-badge' : ''}` }, inside ? `↳ ${group.kind}:` : group.kind),
+      { class: 'link search-head search-nav', type: 'button', title: goTitle(object) },
+      h('span', { class: 'badge kind' }, group.kind),
       h('span', { class: 'search-name' }, group.name || '(unnamed)'),
-      where.length > 0 ? h('span', { class: 'muted search-where' }, ` › ${where.join(' › ')}`) : null,
+      group.where.length > 0 ? h('span', { class: 'muted search-where' }, ` › ${group.where.join(' › ')}`) : null,
     );
-    head.addEventListener('click', () => this.changes.revealSearch(group.target, group.open));
+    head.addEventListener('click', () => this.changes.revealSearch(object, group.target));
     return h(
       'section',
       { class: 'search-group' },
       head,
-      h('ul', { class: 'search-list' }, ...g.hits.map((hit) => this.searchRow(group.target, hit))),
+      h('ul', { class: 'search-list' }, ...g.hits.map((hit) => this.searchRow(object, group.target, hit))),
     );
   }
 
   /**
-   * A row goes where the match is: inside a called service it opens the
-   * service and selects the step ("Show caller" stays on the process and
-   * selects the activity instead); otherwise it selects the element.
+   * A row goes where the match is (revealSearch). A row of a service that
+   * processes call has "Show caller": one caller, or a small menu of them.
    */
-  private searchRow(target: SearchTarget, hit: SearchHit): HTMLElement {
-    const open = hit.open;
+  private searchRow(object: SearchObject, target: SearchResultGroup['group']['target'], hit: SearchHit): HTMLElement {
     const row = h(
       'button',
-      {
-        class: 'search-row search-nav',
-        type: 'button',
-        title: open ? 'Open the called service as a diagram and select this step' : 'Select in the diagram and show its details',
-      },
+      { class: 'search-row search-nav', type: 'button', title: goTitle(object) },
       h('span', { class: 'search-label muted' }, hit.label),
       h('span', { class: 'search-snippet' }, hit.before, h('mark', {}, hit.match), hit.after),
     );
-    row.addEventListener('click', () => this.changes.revealSearch(target, open));
-    let caller: HTMLButtonElement | null = null;
-    if (open) {
-      caller = h('button', { class: 'link small search-caller', type: 'button', title: 'Stay on the process and select the activity that calls this service' }, 'Show caller');
-      caller.addEventListener('click', () => this.changes.revealSearch(target));
-    }
-    return h('li', { class: 'search-hit' }, row, caller);
+    row.addEventListener('click', () => this.changes.revealSearch(object, target, hit.dataField));
+    return h('li', { class: 'search-hit' }, row, this.callerLink(object));
   }
 
-  private revealType(name: string): void {
+  private callerLink(object: SearchObject): HTMLElement | null {
+    const callers = object.calledBy ?? [];
+    if (callers.length === 0) return null;
+    const title = 'Stay in the process and select the activity that calls this service';
+    if (callers.length === 1) {
+      const link = h('button', { class: 'link small search-caller', type: 'button', title }, 'Show caller');
+      link.addEventListener('click', () => this.changes.showCaller(callers[0]));
+      return link;
+    }
+    // Several callers: a small menu, opened and closed by the link.
+    const menu = h('ul', { class: 'search-callers', hidden: '' });
+    const link = h('button', { class: 'link small search-caller', type: 'button', title, 'aria-expanded': 'false' }, `Show caller (${callers.length}) ▾`);
+    for (const c of callers) {
+      const item = h('button', { class: 'link small', type: 'button', title: `${c.name} in ${c.processName}` }, `${c.name} · ${c.processName}`);
+      item.addEventListener('click', () => {
+        menu.hidden = true;
+        link.setAttribute('aria-expanded', 'false');
+        this.changes.showCaller(c);
+      });
+      menu.append(h('li', {}, item));
+    }
+    link.addEventListener('click', () => {
+      menu.hidden = !menu.hidden;
+      link.setAttribute('aria-expanded', String(!menu.hidden));
+    });
+    return h('span', { class: 'search-caller-anchor' }, link, menu);
+  }
+
+  private revealType(name: string, field?: string): void {
     this.showTab('data');
-    const target = this.tabs.get('data')!.body.querySelector<HTMLElement>(`[data-type-name="${CSS.escape(name)}"]`);
+    const type = this.tabs.get('data')!.body.querySelector<HTMLElement>(`[data-type-name="${CSS.escape(name)}"]`);
+    const row = field !== undefined ? type?.querySelector<HTMLElement>(`[data-field-name="${CSS.escape(field)}"]`) : undefined;
+    const target = row ?? type;
     if (target) {
       target.scrollIntoView({ block: 'start' });
       target.classList.remove('flash');
@@ -334,7 +408,7 @@ export class SidePanel {
       const rows = t.fields.map((f) =>
         h(
           'tr',
-          {},
+          { 'data-field-name': f.name },
           h('td', {}, f.name),
           h('td', { class: 'mono' }, f.type),
           h('td', { class: 'center' }, f.required ? 'yes' : 'no'),
@@ -883,4 +957,21 @@ function parameters(params: ParameterDetails[], revealType: RevealType): HTMLEle
       return h('li', {}, h('span', {}, p.name), type ? ' : ' : null, type);
     }),
   );
+}
+
+/** A mark for each kind of object in the Search tab. */
+const OBJECT_ICONS: Readonly<Record<SearchObject['kind'], string>> = {
+  process: '◆',
+  service: '⚙',
+  dataType: '▤',
+};
+
+/** Where a click on a search result goes, as a tooltip. */
+function goTitle(object: SearchObject): string {
+  if (object.kind === 'dataType') return 'Show in Data tab';
+  if (object.kind === 'service') {
+    if (!object.openable) return 'This service has no diagram: selects the activity that calls it';
+    return 'Open the service as a diagram and select this element';
+  }
+  return 'Select in the diagram and show its details';
 }
