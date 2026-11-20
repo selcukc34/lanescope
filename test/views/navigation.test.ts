@@ -252,7 +252,7 @@ describe.skipIf(!REAL)('ViewerSession: opening calls', () => {
   it('keeps the level across a toolbar toggle, keeping the zoom', async () => {
     const { open, s, last } = await onMain();
     await open(ROUTING);
-    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
     expect(names(last())).toEqual(['Demo_MainProcess', 'Demo_Routing']);
     expect(last().preserveView).toBe(true);
   });

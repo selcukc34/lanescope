@@ -1,7 +1,9 @@
 // Read-only custom editor that shows a Bob .bpmn file (or a .zip holding one)
 // or an IBM BAW .twx export as a BPMN diagram. Nothing is ever written back
 // to the opened file: exports go to a new file picked in a save dialog and
-// checked by ./exportFiles (never the input, never an input type).
+// checked by ./exportFiles (never the input, never an input type). A file
+// picked to compare with is read the same way as the opened one, and never
+// written or watched.
 
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
@@ -18,13 +20,15 @@ import {
   EXPORT_LABELS,
 } from './exportFiles';
 import { EXPORT_FORMATS, type ExportFormat, type HostMessage, type ViewerSettings } from './protocol';
-import { ViewerSession, type ExportHost } from './viewerSession';
+import { ViewerSession, type CompareHost, type ExportHost } from './viewerSession';
 import { isWatchedChange, watchPatternFor } from './watchPattern';
 import { buildWebviewHtml, createNonce } from './webviewHtml';
 
 export const VIEW_TYPE = 'lanescope.processViewer';
 export const OPEN_COMMAND = 'lanescope.open';
 export const EXPORT_COMMAND = 'lanescope.export';
+export const COMPARE_COMMAND = 'lanescope.compare';
+export const CLEAR_COMPARISON_COMMAND = 'lanescope.clearComparison';
 /** Memento key of the folder the last export was written to. */
 const LAST_EXPORT_FOLDER_KEY = 'lanescope.lastExportFolder';
 export const CONFIG_SECTION = 'lanescope';
@@ -40,6 +44,8 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       }),
       vscode.commands.registerCommand(OPEN_COMMAND, (uri?: vscode.Uri) => openInViewer(uri)),
       vscode.commands.registerCommand(EXPORT_COMMAND, () => provider.exportActive()),
+      vscode.commands.registerCommand(COMPARE_COMMAND, () => provider.compareActive()),
+      vscode.commands.registerCommand(CLEAR_COMPARISON_COMMAND, () => provider.clearActive()),
     );
   }
 
@@ -57,9 +63,35 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
     return vscode.workspace.workspaceFolders?.length ? this.context.workspaceState : this.context.globalState;
   }
 
+  private activeSession(): ViewerSession | undefined {
+    return [...this.sessions].find(([panel]) => panel.active)?.[1];
+  }
+
+  /** Lanescope: Compare With…: compares the active viewer's diagram with a picked file. */
+  private async compareActive(): Promise<void> {
+    const session = this.activeSession();
+    if (!session) {
+      void vscode.window.showInformationMessage('Open a diagram in Lanescope to compare it.');
+      return;
+    }
+    if (!(await session.requestCompare())) {
+      void vscode.window.showInformationMessage('There is no diagram to compare: it could not be drawn.');
+    }
+  }
+
+  /** Lanescope: Clear Comparison: back to comparing with the previous version. */
+  private async clearActive(): Promise<void> {
+    const session = this.activeSession();
+    if (!session?.comparingWithFile) {
+      void vscode.window.showInformationMessage('The diagram is not compared with a file.');
+      return;
+    }
+    await session.clearComparison();
+  }
+
   /** Lanescope: Export Diagram…: asks for the format and exports the active viewer's diagram. */
   private async exportActive(): Promise<void> {
-    const session = [...this.sessions].find(([panel]) => panel.active)?.[1];
+    const session = this.activeSession();
     if (!session) {
       void vscode.window.showInformationMessage('Open a diagram in Lanescope to export it.');
       return;
@@ -94,6 +126,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       post: (message: HostMessage) => webview.postMessage(message),
       settings: readSettings(),
       exporter: exportHost(document.uri, () => this.exportState()),
+      comparer: compareHost(document.uri),
     });
     this.sessions.set(panel, session);
     // Listen before setting the HTML so the webview's "ready" is never missed.
@@ -165,6 +198,36 @@ function exportHost(source: vscode.Uri, state: () => vscode.Memento): ExportHost
       await state().update(LAST_EXPORT_FOLDER_KEY, path.dirname(target));
       void showExported(uri, format);
     },
+    failed(message) {
+      void vscode.window.showErrorMessage(message);
+    },
+  };
+}
+
+/**
+ * Open dialog and read-only load of the file to compare with. It is read
+ * like an opened file (same readers and limits), once, and not watched.
+ */
+function compareHost(source: vscode.Uri): CompareHost {
+  return {
+    async chooseBase() {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        canSelectFolders: false,
+        defaultUri: source.scheme === 'file' ? vscode.Uri.file(path.dirname(source.fsPath)) : undefined,
+        openLabel: 'Compare',
+        title: `Compare ${path.basename(source.path)} With`,
+        filters: { 'Bob BPMN package or BAW export': ['zip', 'bpmn', 'twx'] },
+      });
+      const uri = picked?.[0];
+      if (!uri) return undefined;
+      if (uri.scheme !== 'file' || !SUPPORTED.has(path.extname(uri.fsPath).toLowerCase())) {
+        void vscode.window.showErrorMessage('Lanescope can compare with local .bpmn, .zip and .twx files only.');
+        return undefined;
+      }
+      return uri.fsPath;
+    },
+    loadBase: (filePath) => loadPackage(vscode.Uri.file(filePath)),
     failed(message) {
       void vscode.window.showErrorMessage(message);
     },

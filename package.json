@@ -74,6 +74,14 @@
       {
         "command": "lanescope.export",
         "title": "Lanescope: Export Diagram…"
+      },
+      {
+        "command": "lanescope.compare",
+        "title": "Lanescope: Compare With…"
+      },
+      {
+        "command": "lanescope.clearComparison",
+        "title": "Lanescope: Clear Comparison"
       }
     ],
     "menus": {
@@ -91,6 +99,21 @@
         {
           "command": "lanescope.export",
           "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.compare",
+          "when": "activeCustomEditorId == lanescope.processViewer"
+        },
+        {
+          "command": "lanescope.clearComparison",
+          "when": "activeCustomEditorId == lanescope.processViewer"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "lanescope.compare",
+          "when": "activeCustomEditorId == lanescope.processViewer",
+          "group": "1_lanescope@1"
         }
       ]
     }

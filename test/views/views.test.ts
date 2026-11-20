@@ -36,9 +36,9 @@ describe('parseWebviewMessage', () => {
     expect(
       parseWebviewMessage({
         type: 'setOptions',
-        options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, extra: 1 },
+        options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true, extra: 1 },
       }),
-    ).toEqual({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    ).toEqual({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
   });
 
   it('rejects malformed messages', () => {
@@ -51,7 +51,7 @@ describe('parseWebviewMessage', () => {
       { type: 'save' },
       { type: 'setOptions' },
       { type: 'setOptions', options: null },
-      { type: 'setOptions', options: { hideGeneratedFlowLabels: 'yes', hideEmptyLanes: true } },
+      { type: 'setOptions', options: { hideGeneratedFlowLabels: 'yes', hideEmptyLanes: true, highlightChanges: true } },
       { type: 'selectProcess' },
       { type: 'selectProcess', processId: '' },
       { type: 'selectProcess', processId: 7 },
@@ -243,13 +243,13 @@ describe('ViewerSession', () => {
   it('renders on ready and re-renders with new options, loading once', async () => {
     const { s, posted, loads } = session(async () => pkg);
     await s.handleMessage({ type: 'ready' });
-    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false } });
+    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false, highlightChanges: true } });
 
     expect(posted.map((m) => m.type)).toEqual(['render', 'render']);
     const [first, second] = posted as RenderMessage[];
     expect(first.preserveView).toBe(false);
     expect(second.preserveView).toBe(true);
-    expect(second.options).toEqual({ hideGeneratedFlowLabels: false, hideEmptyLanes: false });
+    expect(second.options).toEqual({ hideGeneratedFlowLabels: false, hideEmptyLanes: false, highlightChanges: true });
     expect(s.currentOptions).toEqual(second.options);
     expect(loads()).toBe(1);
   });
@@ -259,7 +259,7 @@ describe('ViewerSession', () => {
     await s.handleMessage({ type: 'ready' });
     const target = manyPkg.processes[4];
     await s.handleMessage({ type: 'selectProcess', processId: target.id });
-    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
 
     const [first, selected, toggled] = posted as RenderMessage[];
     expect(first.process.id).toBe(manyPkg.processes[0].id);
@@ -329,7 +329,7 @@ describe('ViewerSession', () => {
       const { s, posted, loads } = session(async () => pkg);
       await s.start();
       await s.handleMessage({ type: 'ready' });
-      await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false } });
+      await s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: false, highlightChanges: true } });
       await s.handleMessage({ type: 'ready' });
 
       expect(posted.map((m) => m.type)).toEqual(['render', 'render', 'render']);
@@ -355,7 +355,7 @@ describe('ViewerSession', () => {
       await s.handleMessage({ type: 'ready' });
       const toggle = s.handleMessage({
         type: 'setOptions',
-        options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true },
+        options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true },
       });
       const ready = s.handleMessage({ type: 'ready' });
       await Promise.all([toggle, ready]);
@@ -368,7 +368,7 @@ describe('ViewerSession', () => {
   it('drops a render that a newer request overtook', async () => {
     const { s, posted } = session(async () => pkg);
     const a = s.handleMessage({ type: 'ready' });
-    const b = s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    const b = s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
     await Promise.all([a, b]);
     expect(posted).toHaveLength(1);
     expect((posted[0] as RenderMessage).options.hideGeneratedFlowLabels).toBe(false);

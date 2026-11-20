@@ -101,14 +101,20 @@ describe('read-only: no API that writes, deletes, edits or runs anything', () =>
     ).toEqual([]);
   });
 
-  it('contributes two commands: open a file, and export the shown diagram to a new file', () => {
+  it('contributes four commands: open a file, export the shown diagram to a new file, compare with a file and clear that', () => {
     const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string }>; menus: { commandPalette: Array<{ command: string; when?: string }> } };
     };
-    expect(pkg.contributes.commands.map((c) => c.command)).toEqual(['lanescope.open', 'lanescope.export']);
-    expect(pkg.contributes.menus.commandPalette).toContainEqual({
-      command: 'lanescope.export',
-      when: 'activeCustomEditorId == lanescope.processViewer',
-    });
+    expect(pkg.contributes.commands.map((c) => c.command)).toEqual(['lanescope.open', 'lanescope.export', 'lanescope.compare', 'lanescope.clearComparison']);
+    for (const command of ['lanescope.export', 'lanescope.compare', 'lanescope.clearComparison']) {
+      expect(pkg.contributes.menus.commandPalette).toContainEqual({ command, when: 'activeCustomEditorId == lanescope.processViewer' });
+    }
+  });
+
+  it('reads the file to compare with through the same loader as the opened file, and never watches it', () => {
+    const provider = readFileSync(path.join(ROOT, 'src/views/processEditorProvider.ts'), 'utf8');
+    expect(provider).toContain('loadBase: (filePath) => loadPackage(vscode.Uri.file(filePath)),');
+    // One watcher: the opened file's.
+    expect(provider.match(/createFileSystemWatcher\(/g)).toHaveLength(1);
   });
 });

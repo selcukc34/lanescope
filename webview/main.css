@@ -644,3 +644,108 @@ table.grid td {
   visibility: hidden;
   pointer-events: none;
 }
+
+/* ---- Comparison ------------------------------------------------------- */
+
+/*
+ * Added and changed elements. The git decoration colours of the theme are
+ * green and amber in light and dark themes alike (and follow high-contrast
+ * themes); the fallbacks are VS Code's dark-theme defaults.
+ */
+:root {
+  --ls-diff-added: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
+  --ls-diff-changed: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+  --ls-diff-removed: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39);
+}
+
+/* bpmn-js sets stroke colours inline, so the markers need !important. */
+.djs-shape.ls-diff-added .djs-visual > :first-child,
+.djs-connection.ls-diff-added .djs-visual > path {
+  stroke: var(--ls-diff-added) !important;
+  stroke-width: 3px !important;
+}
+
+.djs-shape.ls-diff-changed .djs-visual > :first-child,
+.djs-connection.ls-diff-changed .djs-visual > path {
+  stroke: var(--ls-diff-changed) !important;
+  stroke-width: 3px !important;
+}
+
+.tab.has-changes {
+  color: var(--ls-diff-changed);
+}
+
+.compared-with {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 8px;
+  word-break: break-word;
+}
+
+.compared-with .button {
+  margin-left: auto;
+  flex: none;
+}
+
+.change-list,
+.change-details {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.change {
+  padding: 3px 0 5px 8px;
+  border-left: 3px solid transparent;
+  margin-bottom: 4px;
+}
+
+.change.added {
+  border-left-color: var(--ls-diff-added);
+}
+
+.change.changed {
+  border-left-color: var(--ls-diff-changed);
+}
+
+.change.removed {
+  border-left-color: var(--ls-diff-removed);
+}
+
+.change-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  word-break: break-word;
+}
+
+.change-line .link {
+  text-align: left;
+  word-break: break-word;
+}
+
+.change-details {
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.change-details li {
+  word-break: break-word;
+}
+
+.badge.diff-added {
+  background: var(--ls-diff-added);
+  color: var(--vscode-editor-background);
+}
+
+.badge.diff-changed {
+  background: var(--ls-diff-changed);
+  color: var(--vscode-editor-background);
+}
+
+.badge.diff-removed {
+  background: var(--ls-diff-removed);
+  color: var(--vscode-editor-background);
+}

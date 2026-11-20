@@ -173,20 +173,34 @@ const DISCOUNT_SERVICE = `<?xml version="1.0" encoding="UTF-8"?>
   </process>
 </teamworks>`;
 
+/** Id of the BPD in the variant with other ids. */
+export const OTHER_BPD_ID = '25.00000000-0000-4000-8000-0000000000b2';
+
+export interface SyntheticOptions {
+  /**
+   * The same BPD with every BPD, node, flow and lane id changed, as BAW may
+   * give it in another export: the comparison must pair it by names.
+   */
+  otherIds?: boolean;
+}
+
+const withOtherIds = (xml: string) => xml.replaceAll(BPD_ID, OTHER_BPD_ID).replace(/\b(node|flow|lane):/g, '$1-b2:');
+
 /** The export as zip bytes. */
-export async function syntheticTwxBytes(): Promise<Uint8Array> {
+export async function syntheticTwxBytes(options: SyntheticOptions = {}): Promise<Uint8Array> {
   const zip = new JSZip();
-  zip.file('META-INF/package.xml', PACKAGE_XML);
-  zip.file(`objects/${BPD_ID}.xml`, BPD_OBJECT);
+  const bpdId = options.otherIds ? OTHER_BPD_ID : BPD_ID;
+  zip.file('META-INF/package.xml', options.otherIds ? withOtherIds(PACKAGE_XML) : PACKAGE_XML);
+  zip.file(`objects/${bpdId}.xml`, options.otherIds ? withOtherIds(BPD_OBJECT) : BPD_OBJECT);
   zip.file(`objects/${PRICE_SERVICE_ID}.xml`, PRICE_SERVICE);
   zip.file(`objects/${DISCOUNT_SERVICE_ID}.xml`, DISCOUNT_SERVICE);
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }
 
-export async function syntheticTwxArchive(): Promise<TwxArchive> {
-  return readTwxArchive(await syntheticTwxBytes(), SYNTHETIC_FILE);
+export async function syntheticTwxArchive(options: SyntheticOptions = {}): Promise<TwxArchive> {
+  return readTwxArchive(await syntheticTwxBytes(options), SYNTHETIC_FILE);
 }
 
-export async function syntheticTwxPackage(): Promise<ProcessPackage> {
-  return twxToProcessPackage(await syntheticTwxArchive());
+export async function syntheticTwxPackage(options: SyntheticOptions = {}): Promise<ProcessPackage> {
+  return twxToProcessPackage(await syntheticTwxArchive(options));
 }

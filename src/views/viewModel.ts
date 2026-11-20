@@ -11,12 +11,12 @@ import type {
   DataParameter,
   Flow,
   FlowNode,
-  FlowNodeKind,
   Process,
   ProcessPackage,
   ProcessVariable,
 } from '../model/model';
 import { toDiagramXml } from '../bpmn/toDiagramXml';
+import { KIND_LABELS } from '../model/labels';
 import { validateProcess } from '../validate/validate';
 import {
   DEFAULT_VIEWER_SETTINGS,
@@ -36,23 +36,6 @@ import {
   type ViewerSettings,
   type ViewOptions,
 } from './protocol';
-
-const KIND_LABELS: Record<FlowNodeKind, string> = {
-  startEvent: 'Start event',
-  endEvent: 'End event',
-  intermediateEvent: 'Intermediate event',
-  task: 'Task',
-  scriptTask: 'Script task',
-  userTask: 'User task',
-  serviceTask: 'Service task',
-  callActivity: 'Call activity',
-  subProcess: 'Sub-process',
-  exclusiveGateway: 'Exclusive gateway',
-  parallelGateway: 'Parallel gateway',
-  inclusiveGateway: 'Inclusive gateway',
-  eventBasedGateway: 'Event-based gateway',
-  unknown: 'Unknown (drawn as task)',
-};
 
 /** A level below the chosen process: what to draw instead of it, and the breadcrumb. */
 export interface LevelView {

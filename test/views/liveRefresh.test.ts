@@ -142,7 +142,7 @@ describe('live refresh', () => {
 
     // A toggle redraws the same read: the time does not change.
     live.tick(5_000);
-    await live.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    await live.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
     expect((live.posted[2] as RenderMessage).loadedAt).toBe(first + 5_000);
   });
 
@@ -165,7 +165,7 @@ describe('live refresh', () => {
     expect((live.posted[2] as RenderMessage).process.name).toBe(pkg.processes[0].name);
 
     // A toggle while broken redraws the last good package and keeps the banner.
-    await live.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true } });
+    await live.s.handleMessage({ type: 'setOptions', options: { hideGeneratedFlowLabels: false, hideEmptyLanes: true, highlightChanges: true } });
     expect(live.types().slice(4)).toEqual(['render', 'refreshError']);
     expect((live.posted[4] as RenderMessage).options.hideGeneratedFlowLabels).toBe(false);
     expect(live.loads()).toBe(2);
