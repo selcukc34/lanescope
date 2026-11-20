@@ -7,7 +7,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     files: ['**/*.mjs'],
-    languageOptions: { globals: { process: 'readonly' } },
+    languageOptions: { globals: { process: 'readonly', console: 'readonly' } },
   },
   {
     // Parsing, model, layout, validation, comparison and trace code must stay free of the
