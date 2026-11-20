@@ -59,3 +59,7 @@ Approved runtime dependencies: `jszip`, `bpmn-moddle`, `fast-xml-parser`, `elkjs
 ## Fixtures
 
 BAW exports never go to the repo: `.twx` files may contain customer data and IBM toolkit content. They live on the developer machine in `test/fixtures/local/`, which `.gitignore` excludes. Never commit a `.twx` file, an output derived from one, or customer names, endpoints, user names or personal paths.
+
+## Git
+
+Stage files by name (`git add <path> ...`). Never use `git add -A`, `git add .` or `git commit -a`. Run `git status` before every commit and make sure only intended files are staged; never commit F5 leftovers, generated test files or anything derived from `test/fixtures/local/`.
