@@ -16,6 +16,12 @@ CLAUDE.local.md
 test/fixtures/twx/
 test/fixtures/local/
 
+# Descriptions written next to fixtures while testing (New or Open Process
+# Description). The one committed description is Bob's input for the Order
+# Delivery Process.
+test/fixtures/**/*-description.md
+!test/fixtures/bob/order-delivery-process-description.md
+
 # Build and test output
 *.vsix
 test/output/
