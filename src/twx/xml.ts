@@ -4,7 +4,7 @@
 // local names, so namespace prefixes (ns15:, p:) do not matter.
 
 import { XMLParser } from 'fast-xml-parser';
-import { DOCTYPE_MESSAGE, hasDoctype } from '../input/xmlGuard';
+import { assertNoDoctype } from '../input/xmlGuard';
 
 export interface XmlElement {
   /** Local name, without the namespace prefix. */
@@ -39,9 +39,9 @@ const parser = new XMLParser({
 
 type OrderedNode = Record<string, unknown>;
 
-/** Parses a document and returns its root element. Throws XmlError. */
+/** Parses a document and returns its root element. Throws DoctypeError (never parsed) or XmlError. */
 export function parseXml(xml: string): XmlElement {
-  if (hasDoctype(xml)) throw new XmlError(DOCTYPE_MESSAGE);
+  assertNoDoctype(xml);
   let nodes: OrderedNode[];
   try {
     nodes = parser.parse(xml) as OrderedNode[];

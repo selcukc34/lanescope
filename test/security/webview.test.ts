@@ -283,14 +283,16 @@ describe.each([
     const zip = await zipOf({ 'crafted.bpmn': craftedBpmn(), 'types.xsd': craftedXsd(doctype) });
     const pkg = await readProcessPackage(await readBpmnZip(zip, 'crafted.zip'));
     expect(pkg.dataTypes).toEqual([]);
-    expect(pkg.warnings).toContain('Cannot read XSD "types.xsd": XML documents with a DOCTYPE are not accepted.');
+    expect(pkg.warnings).toContain(
+      '1 XSD file was skipped because it contains a DOCTYPE declaration (rejected for security reasons); business objects from it are not shown: types.xsd.',
+    );
   });
 
   it('as a TWX object: the BPD is not read', async () => {
     expect(() => parseXml(`${doctype}<root/>`)).toThrow('DOCTYPE');
     // The export's only BPD is the one with the DOCTYPE: nothing is left to show.
     const archive = await readTwxArchive(await craftedTwx({ bpdProlog: doctype }), 'crafted.twx');
-    await expect(twxToProcessPackage(archive)).rejects.toThrow('does not contain a business process definition');
+    await expect(twxToProcessPackage(archive)).rejects.toThrow(/^Lanescope could not open this file: .* contains a DOCTYPE declaration/);
   });
 });
 

@@ -43,6 +43,7 @@ import { dataObjectVariable, ioParameters, NON_FLOW_ELEMENTS, parametersOf, read
 import { nodeVisualInfo, readLinkPorts, withXmlIds } from './diagram';
 import type { TwxResolver } from './resolver';
 import { docText } from './text';
+import { DoctypeError } from '../input/xmlGuard';
 import { attr, child, childText, children, descendants, first, parseXml, textContent, type XmlElement } from './xml';
 
 export { portLocation } from './diagram';
@@ -51,7 +52,9 @@ export type BpdReadResult =
   | { kind: 'process'; process: Process; warnings: string[] }
   /** An embedded (event) subprocess saved as an object of its own: its nodes are part of its parent BPD. */
   | { kind: 'embedded'; parentId: string }
-  | { kind: 'skipped'; warning: string };
+  | { kind: 'skipped'; warning: string }
+  /** The BPMN2 model inside the object has a DOCTYPE: rejected, never parsed. */
+  | { kind: 'rejected'; reason: 'doctype' };
 
 const EVENTS: Readonly<Record<string, FlowNodeKind>> = {
   startEvent: 'startEvent',
@@ -104,7 +107,8 @@ const SERVICE_TYPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Reads one BPD object file. Throws only on XML that is not well formed.
+ * Reads one BPD object file. Throws only on XML that is not well formed
+ * (XmlError) or that has a DOCTYPE (DoctypeError).
  * @param objectXml the XML of another object of the export by id, for the
  *   diagrams of the BPD's sub-processes; without it their nodes have no bounds.
  */
@@ -126,7 +130,8 @@ export function readBpd(objectXml: string, resolver: TwxResolver, otherObject?: 
   let definitions: XmlElement;
   try {
     definitions = parseXml(data);
-  } catch {
+  } catch (err) {
+    if (err instanceof DoctypeError) return { kind: 'rejected', reason: 'doctype' };
     // Parser messages can quote the model: never pass them on.
     return { kind: 'skipped', warning: `The BPMN2 model of ${label} could not be parsed; it is not shown.` };
   }

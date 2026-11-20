@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **DOCTYPE rejections are explained.** A document with a DOCTYPE is still never parsed, but the reason is no longer lost:
+  - When nothing can be shown because of it (the only BPD of a `.twx`, a `.bpmn` file, or the `.bpmn` inside a zip), the error says so: `Lanescope could not open this file: <name> contains a DOCTYPE declaration, which is rejected for security reasons (XML entity expansion). Export the process again without a DOCTYPE.` More than one rejected BPD is shown as `<first> and N more`. Before, a `.twx` showed the generic "does not contain a business process definition" error.
+  - When the file still opens, the Warnings tab has one line that lists what was skipped: `N objects were skipped because they contain a DOCTYPE declaration (rejected for security reasons): …` for `.twx` objects, and the same for `.xsd` files, whose business objects are then missing.
+  - Messages name objects (by their package.xml name and path) or files only, never their content.
+
+### Internal
+
+- Tests: in-memory tests for the DOCTYPE messages (TWX with one or two BPDs, `.bpmn`, `.bpmn` and `.xsd` in a zip). Without `test/fixtures/local/` the suite passes with the tests that need real exports skipped.
+
 ## 0.4.0 — 2026-11-20
 
 ### Added
