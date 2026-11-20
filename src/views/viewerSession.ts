@@ -45,7 +45,11 @@
 // read once through CompareHost, never watched, never written), else the
 // package that was shown before the latest reload ("previous version"). A
 // picked file stays the base across reloads until clearComparison(); the
-// previous version moves on with every reload that reads a new package.
+// previous version moves on with every reload that reads a package that
+// differs from the shown one (by the comparison of the chosen process and
+// the business objects, not by file bytes): a reload with the same content
+// (a touch, Bob writing the same process again) keeps the base, so the
+// changes stay on screen.
 // The comparison covers processes only: a drawn service diagram or linked
 // process gets a note instead.
 
@@ -477,8 +481,8 @@ export class ViewerSession {
         this.settings,
         level,
       );
-      // A package other than the shown one: the shown one becomes the previous version.
-      const previous = this.good && this.good.loaded !== loaded ? this.good.loaded : this.previous;
+      // A package that differs from the shown one: the shown one becomes the previous version.
+      const previous = this.good && this.good.loaded !== loaded && this.differs(this.good.loaded, loaded, plan.root) ? this.good.loaded : this.previous;
       const diff = this.diffView(loaded, plan.root, drawn.value.process, plan.levels.length > 1, previous);
       const render: RenderMessage = diff ? { ...built, diff } : built;
       result = { loaded, render, below, previous };
@@ -543,6 +547,17 @@ export class ViewerSession {
         : `${name} is no longer in the file; showing ${deepest.name || deepest.id}`;
     }
     return { root, levels: resolved.levels, ...(note ? { note } : {}) };
+  }
+
+  /**
+   * True when `loaded` differs from `shown` in the chosen process or the
+   * business objects, as the comparison sees it (layout alone is no difference).
+   */
+  private differs(shown: Loaded, loaded: Loaded, root: Process): boolean {
+    const before = matchProcess(shown.pkg, root, loaded.pkg);
+    if (!before) return true;
+    const d = diffProcess(before, root, shown.pkg.dataTypes, loaded.pkg.dataTypes);
+    return d.counts.added + d.counts.removed + d.counts.changed > 0;
   }
 
   /**

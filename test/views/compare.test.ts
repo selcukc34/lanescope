@@ -194,6 +194,28 @@ describe('comparison with the previous version (live refresh)', () => {
     expect(t.last().diff!.added.map((e) => e.label)).toContain('Task "Lookup Country Info SF"');
   });
 
+  it('keeps the base and its time when a reload brings the same content, and moves on when it differs', async () => {
+    const t = await opened({ content: v1 });
+    await t.changed(v2);
+    const first = t.last().diff!;
+    expect(first.counts).toEqual({ added: 2, removed: 2, changed: 6 });
+
+    // Bob writes the same v2 again (a new read of equal content): the changes stay.
+    await t.changed({ ...v2, processes: v2.processes.map((p) => ({ ...p })) });
+    const again = t.last().diff!;
+    expect(again.counts).toEqual(first.counts);
+    expect(again.loadedAt).toBe(first.loadedAt);
+    expect(again.changed.map((e) => e.label)).toEqual(first.changed.map((e) => e.label));
+    expect(again.marks).toEqual(first.marks);
+
+    // v1 again: compared with v2, mirrored.
+    await t.changed(v1);
+    const back = t.last().diff!;
+    expect(back.loadedAt).toBeGreaterThan(first.loadedAt);
+    expect(back.added.map((e) => e.label)).toEqual(['Task "Lookup Country Info SF"', 'Flow "To Determine Order Route SF"']);
+    expect(back.removed.map((e) => e.label)).toEqual(['Task "Notify Customer SF"', 'Flow "To Order Auto Approved"']);
+  });
+
   it('keeps the previous version when a reload fails', async () => {
     const t = await opened({ content: v1 });
     await t.changed(v2);
