@@ -28,10 +28,14 @@ const CHROME = process.env.LANESCOPE_CHROME ?? (existsSync(MAC_CHROME) ? MAC_CHR
 const ROOT = path.join(__dirname, '..', '..');
 const MANAGER_TASK_ID = 'bpmnid-8bb2f288-e134-5909-b32a-670be5367f60';
 
-/** Stands in for the VS Code webview API and records what the page posts, reports and keeps. */
+/**
+ * Stands in for the VS Code webview API and records what the page posts,
+ * reports and keeps. A \`?state=<json>\` query is the state VS Code hands a
+ * webview rebuilt after its editor tab was hidden.
+ */
 const STUB = `
 window.__posted = [];
-window.__state = undefined;
+window.__state = (() => { const s = new URLSearchParams(location.search).get('state'); return s === null ? undefined : JSON.parse(s); })();
 window.__errors = [];
 window.acquireVsCodeApi = () => ({
   postMessage: (m) => window.__posted.push(m),
@@ -267,6 +271,27 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       errors: window.__errors,
     })`);
     expect(after).toEqual({ selected: [checkId], details: 'Check Stock', errors: [] });
+  });
+
+  it('opens the saved tab when the webview is rebuilt (its editor tab was shown again)', async () => {
+    await page.open(url, renderAgain, `document.getElementById('tab-warnings').click()`);
+    const saved = await page.eval<unknown>('window.__state');
+    expect(saved).toEqual({ tab: 'warnings' });
+
+    await page.open(`${url}?state=${encodeURIComponent(JSON.stringify(saved))}`, renderAgain);
+    const shown = await page.eval<{ tab: string; state: unknown; errors: string[] }>(`({
+      tab: document.querySelector('.tab.active').textContent,
+      state: window.__state,
+      errors: window.__errors,
+    })`);
+    expect(shown.tab).toMatch(/^Warnings/);
+    expect(shown.state).toEqual({ tab: 'warnings' });
+    expect(shown.errors).toEqual([]);
+  });
+
+  it('opens Details when the saved tab is not one it knows', async () => {
+    await page.open(`${url}?state=${encodeURIComponent(JSON.stringify({ tab: 'settings' }))}`, renderAgain);
+    expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toBe('Details');
   });
 
   it('keeps the chosen tab on a render without the Compare… flag', async () => {

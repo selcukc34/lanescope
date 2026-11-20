@@ -27,6 +27,10 @@
   - At a sub-process level, the Changes tab lists the comparison of the process and marks the elements drawn there; sub-process lanes pair by id, else by name. In the process, a sub-process with changes inside it is marked changed and its row says **Inner changes: N**.
   - Export works at a sub-process level like at any other.
 
+### Fixed
+
+- The side panel keeps the selected tab when you switch between editor tabs.
+
 ## 0.3.2 — 2026-11-19
 
 ### Security

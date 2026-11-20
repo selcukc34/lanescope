@@ -21,7 +21,7 @@ import type {
 import { clear, h } from './dom';
 import { renderExportPng, renderExportSvg } from './exportImage';
 import { LOAD_TIMEOUT_MS, startLoadWatchdog } from './loadWatchdog';
-import { SidePanel, type TabId } from './panel';
+import { isTabId, SidePanel, type TabId } from './panel';
 
 interface VsCodeApi {
   postMessage(message: WebviewMessage): void;
@@ -169,8 +169,10 @@ const panel = new SidePanel(
     reveal: (id) => revealElement(id),
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
   },
+  // A hidden webview is rebuilt when its editor tab is shown again: start on
+  // the tab it had (the state is per editor tab), else on Details.
+  isTabId(state.tab) ? state.tab : 'details',
 );
-if (state.tab) panel.showTab(state.tab);
 
 const root = document.getElementById('root')!;
 root.append(toolbar, crumbs, banner, h('div', { class: 'main' }, stage, panel.element));
