@@ -9,6 +9,7 @@ import './main.css';
 import NavigatedViewer from 'bpmn-js/lib/NavigatedViewer';
 import { isPathPrefix, pathKey } from '../src/views/navigation';
 import type {
+  DescriptionStatusMessage,
   ErrorMessage,
   ExportFormat,
   ExportSourceMessage,
@@ -121,6 +122,10 @@ exportGroup.append(exportMenu.element);
 // Trace: a split button. The main part shows the Trace tab (or asks for a description when none is attached);
 // the arrow opens the description commands. The host runs them as it runs the Lanescope commands.
 const TRACE_IDLE_TOOLTIP = 'Check this process against a description';
+const NEW_DESCRIPTION_LABEL = 'New Process Description';
+const OPEN_DESCRIPTION_LABEL = 'Open Process Description';
+const NEW_DESCRIPTION_TOOLTIP = 'Write <name>-description.md from a template next to the opened file, open it and check against it';
+const OPEN_DESCRIPTION_TOOLTIP = 'Open <name>-description.md next to the opened file and check against it';
 const traceBadge = h('span', { class: 'count-badge', hidden: '' });
 const traceButton = h('button', { type: 'button', class: 'button split-main', title: TRACE_IDLE_TOOLTIP }, 'Trace', traceBadge);
 const traceArrow = h('button', { type: 'button', class: 'button split-arrow', title: 'Description commands', 'aria-label': 'Description commands' }, '▾');
@@ -130,13 +135,23 @@ const traceMenu = new DropdownMenu(
   'Description',
   [
     { text: 'Check Against Description…', tooltip: 'Pick a Markdown description to check this process against', run: () => vscode.postMessage({ type: 'checkDescription' }) },
-    { text: 'New Process Description', tooltip: 'Write <name>-description.md from a template next to the opened file', run: () => vscode.postMessage({ type: 'newDescription' }) },
+    // Its label follows the host's answer to descriptionStatus: Open when <name>-description.md is there.
+    { text: NEW_DESCRIPTION_LABEL, tooltip: NEW_DESCRIPTION_TOOLTIP, run: () => vscode.postMessage({ type: 'newDescription' }) },
     { text: 'Clear Description Check', tooltip: 'Stop checking against the description', run: () => vscode.postMessage({ type: 'clearDescription' }) },
   ],
   () => traceGroup,
+  // The file may have come or gone since the last answer: ask again.
+  () => vscode.postMessage({ type: 'descriptionStatus' }),
 );
 traceGroup.append(traceMenu.element);
+const traceDescriptionItem = traceMenu.items[1];
 const traceClearItem = traceMenu.items[2];
+
+/** The Trace menu's second item: Open when <name>-description.md is there (it is then only opened), else New. */
+function showDescriptionStatus(msg: DescriptionStatusMessage): void {
+  traceDescriptionItem.textContent = msg.exists ? OPEN_DESCRIPTION_LABEL : NEW_DESCRIPTION_LABEL;
+  traceDescriptionItem.title = msg.exists ? OPEN_DESCRIPTION_TOOLTIP : NEW_DESCRIPTION_TOOLTIP;
+}
 traceButton.addEventListener('click', () => {
   if (current?.trace) panel.showTab('trace');
   else vscode.postMessage({ type: 'checkDescription' });
@@ -629,6 +644,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   if (msg?.type === 'render') {
     watchdog.answered();
     void render(msg);
+    // The label of the Trace menu's description item, ready before the menu opens.
+    vscode.postMessage({ type: 'descriptionStatus' });
   } else if (msg?.type === 'error') {
     watchdog.answered();
     hideBanner();
@@ -636,6 +653,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   } else if (msg?.type === 'refreshError') {
     watchdog.answered();
     showBanner(msg);
+  } else if (msg?.type === 'descriptionStatus' && typeof msg.exists === 'boolean') {
+    showDescriptionStatus(msg);
   } else if (msg?.type === 'exportSource' && (msg.format === 'svg' || msg.format === 'png')) {
     void exportImage(msg);
   }

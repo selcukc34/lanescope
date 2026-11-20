@@ -49,7 +49,7 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **Highlight changes** | Marks added (green) and changed (amber) elements of the [comparison](#comparing-versions) in the diagram. On by default; the Changes tab lists them either way. |
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
-| **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **New Process Description** and **Clear Description Check**. |
+| **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **Open Process Description** (**New Process Description** while `<name>-description.md` is not there yet) and **Clear Description Check**. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
@@ -219,7 +219,7 @@ The manager reviews:
 - amount
 ```
 
-**Lanescope: New Process Description** (**▾** next to the **Trace** button, the Command Palette or the editor's **…** menu, with a diagram open) writes an empty description in this format next to the opened file, as `<name>-description.md`, opens it beside the diagram and checks the diagram against it. It writes a new file only: when the file already exists, it offers to open it instead and never overwrites it. The template is fixed text; nothing is taken from the process.
+**Lanescope: New or Open Process Description** (the Command Palette or the editor's **…** menu, with a diagram open; in the **▾** menu next to the **Trace** button it reads **Open Process Description** or **New Process Description**) opens `<name>-description.md` next to the opened file beside the diagram and checks the diagram against it. When the file is not there yet, it first writes it as an empty description in this format. It never writes over a file: an existing description is opened as it is, without a question. The template is fixed text; nothing is taken from the process.
 
 ### Asking Bob to use this format
 
@@ -318,7 +318,7 @@ How a description is attached:
 
 - **Found next to the file.** When `<name>-description.md` or `<name>.md` sits next to the opened `.bpmn`, `.zip` or `.twx` (same name without the extension), it is attached when the viewer opens; the Trace tab appears but is not opened. Turn this off with `lanescope.trace.autoDetectDescription`.
 - **Picked.** **Trace** (or **▾ › Check Against Description…**, or **Lanescope: Check Against Description…** in the Command Palette or the editor's **…** menu) asks for a `.md` file and opens the Trace tab.
-- **Written.** **Lanescope: New Process Description** writes and attaches a new one (see above).
+- **Opened or written.** **Lanescope: New or Open Process Description** opens and attaches `<name>-description.md`, writing it from the template first when it is not there (see above).
 - The choice is remembered per file in the workspace. **Clear** in the Trace tab or **Lanescope: Clear Description Check** removes it (and stops a found description from being attached again for that file).
 - The description is watched: the check runs again when it or the process changes on disk. Lanescope only reads it.
 
@@ -342,7 +342,7 @@ The comparison, the warnings and the exports are not affected by the check.
 - The extension only reads the files you open. It never writes, changes, renames or deletes a `.bpmn`, `.xsd`, `.zip` or `.twx` file, and it never deploys anything.
 - The files it writes are new files only: an [export](#export), to a file you pick, never to the opened file or an input type, and a new [description](#lanescope-description-format) from the template.
 - A file picked to [compare with](#comparing-versions) is only read, never watched or written.
-- A [description](#description-traceability) is only read and watched, never written. **New Process Description** writes a new `.md` from a fixed template next to the opened file, and only when no file of that name exists; it never overwrites a file.
+- A [description](#description-traceability) is only read and watched, never written. **New or Open Process Description** writes a new `.md` from a fixed template next to the opened file only when no file of that name exists; an existing one is only opened, never written.
 - Archives are read in memory; nothing is extracted to disk.
 - The diagram view runs under a strict Content Security Policy, uses only scripts bundled in the extension, and makes no network requests.
 

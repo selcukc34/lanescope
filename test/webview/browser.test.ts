@@ -571,6 +571,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
 
   it('Trace button without a description: the main part asks for one, the menu offers the commands, Clear is disabled', async () => {
     await page.open(url, renderAgain);
+    // After the render, the webview asks for the label of the description item.
+    expect(await page.eval<unknown[]>('window.__posted')).toContainEqual({ type: 'descriptionStatus' });
     expect(await page.eval<TraceUi>(traceUi)).toMatchObject({ tooltip: 'Check this process against a description', badge: null, menuOpen: false });
     await page.eval('window.__posted.length = 0');
     await page.clickSelector('.split-main');
@@ -605,6 +607,16 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
     await page.clickSelector('.split-arrow');
     await page.clickSelector('.title');
     expect((await page.eval<TraceUi>(traceUi)).menuOpen).toBe(false);
+
+    // The label follows the host: a render and every opening ask whether the description is there.
+    await page.eval('window.__posted.length = 0');
+    await page.clickSelector('.split-arrow');
+    expect(await page.eval<unknown[]>('window.__posted')).toEqual([{ type: 'descriptionStatus' }]);
+    await page.eval(`(async () => { window.postMessage({ type: 'descriptionStatus', exists: true }, '*'); await new Promise((r) => setTimeout(r, 50)); })()`);
+    expect((await page.eval<TraceUi>(traceUi)).items[1]).toEqual(['Open Process Description', false]);
+    await page.eval(`(async () => { window.postMessage({ type: 'descriptionStatus', exists: false }, '*'); await new Promise((r) => setTimeout(r, 50)); })()`);
+    expect((await page.eval<TraceUi>(traceUi)).items[1]).toEqual(['New Process Description', false]);
+    await page.pressKey('Escape', 'Escape', 27);
     expect(await page.eval<string[]>('window.__errors')).toEqual([]);
   });
 

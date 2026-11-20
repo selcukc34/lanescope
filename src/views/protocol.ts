@@ -352,7 +352,13 @@ export interface ExportSourceMessage {
   xml: string;
 }
 
-export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage;
+/** Host -> webview: whether <base>-description.md is there, so the Trace menu says Open or New. */
+export interface DescriptionStatusMessage {
+  type: 'descriptionStatus';
+  exists: boolean;
+}
+
+export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage | DescriptionStatusMessage;
 
 /** Webview -> host: the webview script is loaded and listening. */
 export interface ReadyMessage {
@@ -397,9 +403,14 @@ export interface CheckDescriptionMessage {
   type: 'checkDescription';
 }
 
-/** Webview -> host: the Trace menu asks to write a new description (as Lanescope: New Process Description). */
+/** Webview -> host: the Trace menu asks to open the description, written from the template when missing (as Lanescope: New or Open Process Description). */
 export interface NewDescriptionMessage {
   type: 'newDescription';
+}
+
+/** Webview -> host: is <base>-description.md there? Answered with a DescriptionStatusMessage. */
+export interface DescriptionStatusRequestMessage {
+  type: 'descriptionStatus';
 }
 
 /** Webview -> host: stop checking against the attached description. */
@@ -444,7 +455,8 @@ export type WebviewMessage =
   | ClearComparisonMessage
   | ClearDescriptionMessage
   | CheckDescriptionMessage
-  | NewDescriptionMessage;
+  | NewDescriptionMessage
+  | DescriptionStatusRequestMessage;
 
 /** A webview message after parseWebviewMessage. */
 export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
@@ -470,7 +482,7 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
   const msg = value as Record<string, unknown>;
   if (msg.type === 'ready') return { type: 'ready' };
   // Messages without a payload: anything besides the type is refused.
-  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison' || msg.type === 'clearDescription' || msg.type === 'checkDescription' || msg.type === 'newDescription') && onlyKeys(msg, ['type'])) return { type: msg.type };
+  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison' || msg.type === 'clearDescription' || msg.type === 'checkDescription' || msg.type === 'newDescription' || msg.type === 'descriptionStatus') && onlyKeys(msg, ['type'])) return { type: msg.type };
   if (msg.type === 'exportRequest' && isExportFormat(msg.format)) return { type: 'exportRequest', format: msg.format };
   if (msg.type === 'exportData') return parseExportData(msg, expected);
   if (msg.type === 'selectProcess' && typeof msg.processId === 'string' && msg.processId.length > 0) {

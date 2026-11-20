@@ -22,6 +22,8 @@ export class DropdownMenu {
     entries: MenuItem[],
     /** The element a pointer down must be outside of to close the menu (the button and the menu). */
     private readonly area: () => HTMLElement,
+    /** Called each time the menu opens, e.g. to bring a label up to date. */
+    private readonly onOpen?: () => void,
   ) {
     button.setAttribute('aria-haspopup', 'menu');
     button.setAttribute('aria-expanded', 'false');
@@ -56,6 +58,7 @@ export class DropdownMenu {
     if (this.button.disabled) return;
     this.element.hidden = false;
     this.button.setAttribute('aria-expanded', 'true');
+    this.onOpen?.();
     this.enabled()[0]?.focus();
   }
 

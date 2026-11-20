@@ -98,7 +98,7 @@
       },
       {
         "command": "lanescope.newDescription",
-        "title": "Lanescope: New Process Description"
+        "title": "Lanescope: New or Open Process Description"
       }
     ],
     "menus": {

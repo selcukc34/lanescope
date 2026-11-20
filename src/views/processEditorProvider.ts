@@ -4,9 +4,10 @@
 // checked by ./exportFiles (never the input, never an input type). A file
 // picked to compare with is read the same way as the opened one, and never
 // written or watched. A description (Markdown) checked against the process is
-// read and watched, never written. "New Process Description" writes the one
-// other file: a new description from a fixed template, created exclusively
-// (never over an existing file), checked by ./descriptionFiles.
+// read and watched, never written. "New or Open Process Description" writes
+// the one other file: a new description from a fixed template, created
+// exclusively (never over an existing file), checked by ./descriptionFiles.
+// When the description is there already, it is only opened.
 
 import { randomBytes } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -134,9 +135,9 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
   }
 
   /**
-   * Lanescope: New Process Description: writes <base>-description.md from the
-   * template next to the opened file, opens it beside the diagram and attaches
-   * it. An existing file is never written: the user may open it instead.
+   * Lanescope: New or Open Process Description: opens <base>-description.md
+   * next to the opened file beside the diagram and attaches it, after writing
+   * it from the template when it is not there. An existing file is never written.
    */
   private async newDescriptionActive(): Promise<void> {
     const viewer = this.activeViewer();
@@ -159,26 +160,28 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       return;
     }
     const target = check.path;
-    const name = path.basename(target);
-    let created = false;
     if (!(await fileExists(target))) {
       try {
         // The second write of the extension: a new file only ('wx' fails when the path exists).
         await writeFile(target, DESCRIPTION_TEMPLATE, { encoding: 'utf8', flag: 'wx' });
-        created = true;
       } catch (err) {
+        // EEXIST: it appeared meanwhile; it is opened as it is.
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-          void vscode.window.showErrorMessage(`Cannot write ${name}: ${err instanceof Error ? err.message : String(err)}`);
+          void vscode.window.showErrorMessage(`Cannot write ${path.basename(target)}: ${err instanceof Error ? err.message : String(err)}`);
           return;
         }
       }
     }
-    if (!created) {
-      const choice = await vscode.window.showWarningMessage(`${name} already exists. It is not overwritten.`, { modal: true }, 'Open existing');
-      if (choice !== 'Open existing') return;
-    }
+    // Existing or just written: open it and attach it. Nothing from here on writes.
     await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false, viewColumn: vscode.ViewColumn.Beside });
     await session.setDescription(target, true);
+  }
+
+  /** Whether the description New or Open Process Description would open is there (for the label of the Trace menu). */
+  private async descriptionExists(uri: vscode.Uri): Promise<boolean> {
+    if (uri.scheme !== 'file') return false;
+    const check = checkNewDescriptionTarget(newDescriptionPath(uri.fsPath), uri.fsPath);
+    return check.ok && (await fileExists(check.path));
   }
 
   /** Lanescope: Clear Description Check. */
@@ -265,6 +268,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
         // The Trace button and menu run what the commands run, for this viewer.
         pick: () => void this.checkDescription(session, document.uri),
         create: () => void this.newDescription(session, document.uri),
+        exists: () => this.descriptionExists(document.uri),
       }),
     });
     this.sessions.set(panel, session);
@@ -382,7 +386,7 @@ function compareHost(source: vscode.Uri): CompareHost {
  * Read-only access to description files: a local file of at most
  * MAX_DESCRIPTION_BYTES, read as UTF-8. `attached` hears every attach and clear.
  */
-function descriptionHost(attached: DescriptionHost['attached'], commands: Pick<DescriptionHost, 'pick' | 'create'>): DescriptionHost {
+function descriptionHost(attached: DescriptionHost['attached'], commands: Pick<DescriptionHost, 'pick' | 'create' | 'exists'>): DescriptionHost {
   return {
     ...commands,
     async read(filePath) {

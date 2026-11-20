@@ -1,9 +1,9 @@
-// "Lanescope: New Process Description" end to end through the real provider,
-// with a stand-in for the vscode module that records every call that could
-// write or edit: an existing description is opened and attached, its bytes
-// and mtime stay as they were, and nothing edits, saves or dirties the
-// opened document. A missing one is created once from the template, and a
-// second run never overwrites it.
+// "Lanescope: New or Open Process Description" end to end through the real
+// provider, with a stand-in for the vscode module that records every call
+// that could write or edit: an existing description is opened and attached
+// without a question, its bytes and mtime stay as they were, and nothing
+// edits, saves or dirties the opened document. A missing one is created once
+// from the template, and a second run only opens it.
 
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -17,8 +17,6 @@ const calls = vi.hoisted(() => ({
   providers: [] as Array<{ resolveCustomEditor(doc: unknown, panel: unknown): void }>,
   warnings: [] as string[],
   errors: [] as string[],
-  /** What the modal answers. */
-  answer: undefined as string | undefined,
   opened: [] as string[],
   /** Every write, edit or save asked of VS Code. */
   writes: [] as string[],
@@ -61,7 +59,7 @@ vi.mock('vscode', () => {
     },
     window: {
       registerCustomEditorProvider: (_: string, p: (typeof calls.providers)[number]) => (calls.providers.push(p), disposable),
-      showWarningMessage: async (m: string) => (calls.warnings.push(m), calls.answer),
+      showWarningMessage: async (m: string) => void calls.warnings.push(m),
       showErrorMessage: async (m: string) => void calls.errors.push(m),
       showInformationMessage: async () => undefined,
       showTextDocument: async (uri: Uri) => {
@@ -135,43 +133,33 @@ beforeEach(() => {
   zip = path.join(dir, 'order.zip');
   md = path.join(dir, 'order-description.md');
   copyFileSync(path.join(BOB, 'order-delivery-process.zip'), zip);
-  Object.assign(calls, { answer: undefined });
   for (const list of [calls.warnings, calls.errors, calls.opened, calls.writes, calls.posted, calls.documents]) list.length = 0;
 });
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-describe('New Process Description with an existing description', () => {
+describe('New or Open Process Description with an existing description', () => {
   beforeEach(() => copyFileSync(path.join(BOB, 'order-delivery-process-description.md'), md));
 
-  it('"Open existing" only opens and attaches it: same bytes, same mtime, no write, no edit, nothing dirty', async () => {
+  it('opens and attaches it without asking: same bytes, same mtime, no write, no edit, nothing dirty', async () => {
     const before = { bytes: readFileSync(md), mtime: statSync(md).mtimeMs };
     openViewer();
-    calls.answer = 'Open existing';
     await runCommand();
 
-    expect(calls.warnings).toEqual(['order-description.md already exists. It is not overwritten.']);
+    expect(calls.warnings).toEqual([]);
+    expect(calls.errors).toEqual([]);
     expect(calls.opened).toEqual([md]);
     expect(calls.writes).toEqual([]);
     expect(calls.documents.map((d) => d.isDirty)).toEqual([false]);
     expect(readFileSync(md).equals(before.bytes)).toBe(true);
     expect(statSync(md).mtimeMs).toBe(before.mtime);
-  });
-
-  it('Cancel opens nothing and writes nothing', async () => {
-    const before = { bytes: readFileSync(md), mtime: statSync(md).mtimeMs };
-    openViewer();
-    calls.answer = undefined;
-    await runCommand();
-    expect(calls.opened).toEqual([]);
-    expect(calls.writes).toEqual([]);
-    expect(readFileSync(md).equals(before.bytes)).toBe(true);
-    expect(statSync(md).mtimeMs).toBe(before.mtime);
+    // Attached: the Trace tab opens with its check.
+    await new Promise((r) => setTimeout(r, 50));
   });
 });
 
-describe('New Process Description without a description', () => {
-  it('creates it once from the template, opens it, and a second run never overwrites it', async () => {
+describe('New or Open Process Description without a description', () => {
+  it('creates it once from the template and opens it; a second run only opens it', async () => {
     openViewer();
     await runCommand();
     expect(readFileSync(md, 'utf8')).toBe(DESCRIPTION_TEMPLATE);
@@ -180,13 +168,14 @@ describe('New Process Description without a description', () => {
     // Through Node's exclusive create, not through VS Code.
     expect(calls.writes).toEqual([]);
 
-    // The user edits it; the command again finds it and only offers to open it.
+    // The user edits it; the command finds it and only opens it again.
     writeFileSync(md, '## Main process steps\n- Mine\n');
     const before = { bytes: readFileSync(md), mtime: statSync(md).mtimeMs };
-    calls.answer = 'Open existing';
     await runCommand();
+    expect(calls.opened).toEqual([md, md]);
+    expect(calls.warnings).toEqual([]);
+    expect(calls.writes).toEqual([]);
     expect(readFileSync(md).equals(before.bytes)).toBe(true);
     expect(statSync(md).mtimeMs).toBe(before.mtime);
-    expect(calls.writes).toEqual([]);
   });
 });

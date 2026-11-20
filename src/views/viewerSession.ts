@@ -133,8 +133,10 @@ export interface DescriptionHost {
   attached(filePath: string | undefined, byUser: boolean): void;
   /** The Trace button asks to pick a description: what Lanescope: Check Against Description… does. */
   pick?(): void;
-  /** The Trace menu asks for a new description: what Lanescope: New Process Description does. */
+  /** The Trace menu asks for the description: what Lanescope: New or Open Process Description does. */
   create?(): void;
+  /** Whether the description that create() opens is there already (it then only opens it). */
+  exists?(): Promise<boolean>;
 }
 
 /** An attached description, as last read. */
@@ -351,6 +353,18 @@ export class ViewerSession {
     this.descriptionTimer = undefined;
   }
 
+  /** Tells the webview whether New or Open Process Description would open an existing file (the Trace menu's label). */
+  private async postDescriptionStatus(): Promise<void> {
+    const exists = this.deps.descriptions?.exists;
+    let there: boolean;
+    try {
+      there = exists ? await exists() : false;
+    } catch {
+      there = false;
+    }
+    if (!this.disposed) this.post({ type: 'descriptionStatus', exists: there });
+  }
+
   /** Path of the attached description, when there is one. */
   get descriptionPath(): string | undefined {
     return this.description?.path;
@@ -460,6 +474,8 @@ export class ViewerSession {
       this.deps.descriptions?.pick?.();
     } else if (msg.type === 'newDescription') {
       this.deps.descriptions?.create?.();
+    } else if (msg.type === 'descriptionStatus') {
+      await this.postDescriptionStatus();
     } else {
       const expected = this.expectedExport!;
       this.expectedExport = undefined;

@@ -49,6 +49,7 @@ function session(content: ProcessPackage) {
   const files: Record<string, string | Error> = { [MD_PATH]: DESCRIPTION };
   const attached: Array<[string | undefined, boolean]> = [];
   const commands: string[] = [];
+  const status = { exists: false };
   const file = { content };
   const s = new ViewerSession({
     fileName: 'order-delivery-process.zip',
@@ -65,6 +66,7 @@ function session(content: ProcessPackage) {
       attached: (p, byUser) => attached.push([p, byUser]),
       pick: () => commands.push('pick'),
       create: () => commands.push('create'),
+      exists: async () => (commands.push('exists'), status.exists),
     },
   });
   return {
@@ -73,6 +75,7 @@ function session(content: ProcessPackage) {
     files,
     attached,
     commands,
+    status,
     file,
     timers,
     last: () => posted.filter((m): m is RenderMessage => m.type === 'render').at(-1)!,
@@ -225,10 +228,22 @@ describe('description check in the session', () => {
   });
 
   it('accepts the description messages from the webview only without a payload', () => {
-    for (const type of ['clearDescription', 'checkDescription', 'newDescription']) {
+    for (const type of ['clearDescription', 'checkDescription', 'newDescription', 'descriptionStatus']) {
       expect(parseWebviewMessage({ type })).toEqual({ type });
       expect(parseWebviewMessage({ type, path: '/etc/passwd' })).toBeUndefined();
     }
+  });
+
+  it('answers the Trace menu whether the description it opens is there', async () => {
+    const t = await opened(v1);
+    await t.s.handleMessage({ type: 'descriptionStatus' });
+    t.status.exists = true;
+    await t.s.handleMessage({ type: 'descriptionStatus' });
+    expect(t.posted.filter((m) => m.type === 'descriptionStatus')).toEqual([
+      { type: 'descriptionStatus', exists: false },
+      { type: 'descriptionStatus', exists: true },
+    ]);
+    expect(t.commands).toEqual(['exists', 'exists']);
   });
 
   it('hands the Trace button and menu to the host, which runs the commands for this viewer', async () => {
