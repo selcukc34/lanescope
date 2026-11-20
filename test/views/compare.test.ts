@@ -364,12 +364,14 @@ describe('webview: diff marks stay in the on-screen viewer', () => {
   it('draws image exports in a viewer of their own that never gets a marker', () => {
     const root = path.join(__dirname, '..', '..', 'webview');
     for (const file of ['exportImage.ts', 'exportSvg.ts']) {
-      expect(readFileSync(path.join(root, file), 'utf8'), file).not.toMatch(/addMarker|ls-diff|\.diff\b/);
+      expect(readFileSync(path.join(root, file), 'utf8'), file).not.toMatch(/addMarker|ls-diff|ls-selected|\.diff\b/);
     }
     const main = readFileSync(path.join(root, 'main.ts'), 'utf8');
-    // Markers are added in one place, on the on-screen viewer, only with "Highlight changes" on.
-    expect(main.match(/\.addMarker\(/g)).toHaveLength(1);
+    // Markers are added in two places, both on the on-screen viewer: the diff marks, only with
+    // "Highlight changes" on, and the selection, on its selection.changed event.
+    expect(main.match(/\.addMarker\(/g)).toHaveLength(2);
     expect(main).toContain('if (!msg.diff || !msg.options.highlightChanges) return;');
+    expect(main).toContain('for (const el of e.newSelection ?? []) for (const marker of selectionMarkers(el)) c.addMarker(el, marker);');
   });
 });
 

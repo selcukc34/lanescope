@@ -392,6 +392,16 @@ export interface ClearComparisonMessage {
   type: 'clearComparison';
 }
 
+/** Webview -> host: the Trace button asks to pick a description (as Lanescope: Check Against Description…). */
+export interface CheckDescriptionMessage {
+  type: 'checkDescription';
+}
+
+/** Webview -> host: the Trace menu asks to write a new description (as Lanescope: New Process Description). */
+export interface NewDescriptionMessage {
+  type: 'newDescription';
+}
+
 /** Webview -> host: stop checking against the attached description. */
 export interface ClearDescriptionMessage {
   type: 'clearDescription';
@@ -432,7 +442,9 @@ export type WebviewMessage =
   | ExportDataMessage
   | CompareRequestMessage
   | ClearComparisonMessage
-  | ClearDescriptionMessage;
+  | ClearDescriptionMessage
+  | CheckDescriptionMessage
+  | NewDescriptionMessage;
 
 /** A webview message after parseWebviewMessage. */
 export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
@@ -458,7 +470,7 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
   const msg = value as Record<string, unknown>;
   if (msg.type === 'ready') return { type: 'ready' };
   // Messages without a payload: anything besides the type is refused.
-  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison' || msg.type === 'clearDescription') && onlyKeys(msg, ['type'])) return { type: msg.type };
+  if ((msg.type === 'compareRequest' || msg.type === 'clearComparison' || msg.type === 'clearDescription' || msg.type === 'checkDescription' || msg.type === 'newDescription') && onlyKeys(msg, ['type'])) return { type: msg.type };
   if (msg.type === 'exportRequest' && isExportFormat(msg.format)) return { type: 'exportRequest', format: msg.format };
   if (msg.type === 'exportData') return parseExportData(msg, expected);
   if (msg.type === 'selectProcess' && typeof msg.processId === 'string' && msg.processId.length > 0) {

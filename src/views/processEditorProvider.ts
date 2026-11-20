@@ -96,15 +96,25 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
     }
   }
 
-  /** Lanescope: Check Against Description…: picks a Markdown description and shows the Trace tab. */
-  private async checkDescriptionActive(): Promise<void> {
+  /** The active viewer's session and opened file. */
+  private activeViewer(): { session: ViewerSession; uri: vscode.Uri } | undefined {
     const active = [...this.sessions].find(([panel]) => panel.active);
     const uri = active ? this.documents.get(active[0]) : undefined;
-    if (!active || !uri) {
+    return active && uri ? { session: active[1], uri } : undefined;
+  }
+
+  /** Lanescope: Check Against Description… on the active viewer. */
+  private async checkDescriptionActive(): Promise<void> {
+    const viewer = this.activeViewer();
+    if (!viewer) {
       void vscode.window.showInformationMessage('Open a diagram in Lanescope to check it against a description.');
       return;
     }
-    const session = active[1];
+    await this.checkDescription(viewer.session, viewer.uri);
+  }
+
+  /** Picks a Markdown description for the viewer of `uri` and shows the Trace tab (the command and the Trace button). */
+  private async checkDescription(session: ViewerSession, uri: vscode.Uri): Promise<void> {
     const current = session.descriptionPath;
     const picked = await vscode.window.showOpenDialog({
       canSelectMany: false,
@@ -129,12 +139,16 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
    * it. An existing file is never written: the user may open it instead.
    */
   private async newDescriptionActive(): Promise<void> {
-    const active = [...this.sessions].find(([panel]) => panel.active);
-    const uri = active ? this.documents.get(active[0]) : undefined;
-    if (!active || !uri) {
+    const viewer = this.activeViewer();
+    if (!viewer) {
       void vscode.window.showInformationMessage('Open a diagram in Lanescope to write a description for it.');
       return;
     }
+    await this.newDescription(viewer.session, viewer.uri);
+  }
+
+  /** Writes and attaches a new description for the viewer of `uri` (the command and the Trace menu). */
+  private async newDescription(session: ViewerSession, uri: vscode.Uri): Promise<void> {
     if (uri.scheme !== 'file') {
       void vscode.window.showErrorMessage('Descriptions can be written next to local files only.');
       return;
@@ -164,7 +178,7 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
       if (choice !== 'Open existing') return;
     }
     await vscode.window.showTextDocument(vscode.Uri.file(target), { preview: false, viewColumn: vscode.ViewColumn.Beside });
-    await active[1].setDescription(target, true);
+    await session.setDescription(target, true);
   }
 
   /** Lanescope: Clear Description Check. */
@@ -247,6 +261,10 @@ export class ProcessEditorProvider implements vscode.CustomReadonlyEditorProvide
         descriptionWatcher?.dispose();
         descriptionWatcher = filePath ? watchFile(filePath, () => session.descriptionChanged()) : undefined;
         if (byUser) void this.context.workspaceState.update(DESCRIPTION_KEY_PREFIX + document.uri.toString(), filePath ?? null);
+      }, {
+        // The Trace button and menu run what the commands run, for this viewer.
+        pick: () => void this.checkDescription(session, document.uri),
+        create: () => void this.newDescription(session, document.uri),
       }),
     });
     this.sessions.set(panel, session);
@@ -364,8 +382,9 @@ function compareHost(source: vscode.Uri): CompareHost {
  * Read-only access to description files: a local file of at most
  * MAX_DESCRIPTION_BYTES, read as UTF-8. `attached` hears every attach and clear.
  */
-function descriptionHost(attached: DescriptionHost['attached']): DescriptionHost {
+function descriptionHost(attached: DescriptionHost['attached'], commands: Pick<DescriptionHost, 'pick' | 'create'>): DescriptionHost {
   return {
+    ...commands,
     async read(filePath) {
       const uri = vscode.Uri.file(filePath);
       const stat = await vscode.workspace.fs.stat(uri);

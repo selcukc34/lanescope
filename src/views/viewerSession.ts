@@ -131,6 +131,10 @@ export interface DescriptionHost {
   read(filePath: string): Promise<string>;
   /** A description was attached (a path) or cleared (undefined); `byUser` when the user asked for it. */
   attached(filePath: string | undefined, byUser: boolean): void;
+  /** The Trace button asks to pick a description: what Lanescope: Check Against Description… does. */
+  pick?(): void;
+  /** The Trace menu asks for a new description: what Lanescope: New Process Description does. */
+  create?(): void;
 }
 
 /** An attached description, as last read. */
@@ -452,6 +456,10 @@ export class ViewerSession {
       await this.clearComparison();
     } else if (msg.type === 'clearDescription') {
       await this.clearDescription();
+    } else if (msg.type === 'checkDescription') {
+      this.deps.descriptions?.pick?.();
+    } else if (msg.type === 'newDescription') {
+      this.deps.descriptions?.create?.();
     } else {
       const expected = this.expectedExport!;
       this.expectedExport = undefined;

@@ -49,7 +49,10 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **Highlight changes** | Marks added (green) and changed (amber) elements of the [comparison](#comparing-versions) in the diagram. On by default; the Changes tab lists them either way. |
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
+| **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **New Process Description** and **Clear Description Check**. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
+
+Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
 
 Changing a toggle redraws the diagram and keeps the zoom and the selection. The toggles keep their state across live refresh, the process selector and opened services; the default by input type applies only when the file is first opened.
 
@@ -216,7 +219,7 @@ The manager reviews:
 - amount
 ```
 
-**Lanescope: New Process Description** (Command Palette or the editor's **…** menu, with a diagram open) writes an empty description in this format next to the opened file, as `<name>-description.md`, opens it beside the diagram and checks the diagram against it. It writes a new file only: when the file already exists, it offers to open it instead and never overwrites it. The template is fixed text; nothing is taken from the process.
+**Lanescope: New Process Description** (**▾** next to the **Trace** button, the Command Palette or the editor's **…** menu, with a diagram open) writes an empty description in this format next to the opened file, as `<name>-description.md`, opens it beside the diagram and checks the diagram against it. It writes a new file only: when the file already exists, it offers to open it instead and never overwrites it. The template is fixed text; nothing is taken from the process.
 
 ### Asking Bob to use this format
 
@@ -309,10 +312,12 @@ The summary counts only what the process can answer: "24 of 24 checkable items f
 
 Each node of the process stands for one step at most. Click a row to select its node or flow (opening the sub-process it is in) and show its details; a field row opens the business object in the Data tab. The diagram is not marked. The check covers the process chosen in the toolbar, whatever level is drawn.
 
+How to open it: the **Trace** button in the diagram's toolbar. With no description attached, **Trace** asks for one; once one is attached, it opens the Trace tab, and a badge on it counts the missing items (no badge when nothing is missing). Its tooltip names the description. The **▾** next to it holds the three description commands, which are also in the Command Palette and the editor's **…** menu.
+
 How a description is attached:
 
 - **Found next to the file.** When `<name>-description.md` or `<name>.md` sits next to the opened `.bpmn`, `.zip` or `.twx` (same name without the extension), it is attached when the viewer opens; the Trace tab appears but is not opened. Turn this off with `lanescope.trace.autoDetectDescription`.
-- **Picked.** **Lanescope: Check Against Description…** in the Command Palette or the editor's **…** menu asks for a `.md` file and opens the Trace tab.
+- **Picked.** **Trace** (or **▾ › Check Against Description…**, or **Lanescope: Check Against Description…** in the Command Palette or the editor's **…** menu) asks for a `.md` file and opens the Trace tab.
 - **Written.** **Lanescope: New Process Description** writes and attaches a new one (see above).
 - The choice is remembered per file in the workspace. **Clear** in the Trace tab or **Lanescope: Clear Description Check** removes it (and stops a found description from being attached again for that file).
 - The description is watched: the check runs again when it or the process changes on disk. Lanescope only reads it.

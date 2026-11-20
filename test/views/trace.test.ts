@@ -48,6 +48,7 @@ function session(content: ProcessPackage) {
   const posted: HostMessage[] = [];
   const files: Record<string, string | Error> = { [MD_PATH]: DESCRIPTION };
   const attached: Array<[string | undefined, boolean]> = [];
+  const commands: string[] = [];
   const file = { content };
   const s = new ViewerSession({
     fileName: 'order-delivery-process.zip',
@@ -62,6 +63,8 @@ function session(content: ProcessPackage) {
         return text;
       },
       attached: (p, byUser) => attached.push([p, byUser]),
+      pick: () => commands.push('pick'),
+      create: () => commands.push('create'),
     },
   });
   return {
@@ -69,6 +72,7 @@ function session(content: ProcessPackage) {
     posted,
     files,
     attached,
+    commands,
     file,
     timers,
     last: () => posted.filter((m): m is RenderMessage => m.type === 'render').at(-1)!,
@@ -220,9 +224,22 @@ describe('description check in the session', () => {
     expect(t.last().xml).not.toContain('Validate Order SF ✓');
   });
 
-  it('accepts clearDescription from the webview only without a payload', () => {
-    expect(parseWebviewMessage({ type: 'clearDescription' })).toEqual({ type: 'clearDescription' });
-    expect(parseWebviewMessage({ type: 'clearDescription', path: '/etc/passwd' })).toBeUndefined();
+  it('accepts the description messages from the webview only without a payload', () => {
+    for (const type of ['clearDescription', 'checkDescription', 'newDescription']) {
+      expect(parseWebviewMessage({ type })).toEqual({ type });
+      expect(parseWebviewMessage({ type, path: '/etc/passwd' })).toBeUndefined();
+    }
+  });
+
+  it('hands the Trace button and menu to the host, which runs the commands for this viewer', async () => {
+    const t = await opened(v1);
+    const before = t.renders();
+    await t.s.handleMessage({ type: 'checkDescription' });
+    await t.s.handleMessage({ type: 'newDescription' });
+    expect(t.commands).toEqual(['pick', 'create']);
+    // The session itself reads or writes nothing for them.
+    expect(t.renders()).toBe(before);
+    expect(t.s.descriptionPath).toBeUndefined();
   });
 });
 

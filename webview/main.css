@@ -9,6 +9,8 @@ body,
 }
 
 body {
+  /* Resolved here, below <html> where VS Code sets the theme colours: the selected element's colour (see the ls-selected rules). */
+  --ls-selection: var(--vscode-focusBorder, #0078d4);
   background: var(--vscode-editor-background);
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
@@ -129,8 +131,20 @@ button {
   outline: none;
 }
 
-.canvas:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
+/*
+ * A click focuses the diagram (diagram-js makes its <svg> focusable), and the
+ * webview's focus style would frame the whole diagram. No frame then; a
+ * keyboard user gets a thin one (main.ts sets data-input on keydown and pointerdown).
+ */
+.canvas:focus,
+.canvas:focus-visible,
+.djs-container svg:focus,
+.djs-container svg:focus-visible {
+  outline: none;
+}
+
+:root[data-input='keyboard'] .canvas:focus-within {
+  outline: 1px solid var(--ls-selection);
   outline-offset: -1px;
 }
 
@@ -164,12 +178,31 @@ button {
 }
 
 /*
- * Selected element in the diagram. The NavigatedViewer draws no outline
- * shapes (diagram-js's outline module is not part of it), so the selection
- * shows as a glow around the element's own shape, on top of any diff mark.
+ * Selected element in the diagram (the ls-selected marker, set by main.ts on
+ * every selection change). The NavigatedViewer draws no outline shapes
+ * (diagram-js's outline module is not part of it), so the element's own
+ * border is drawn thicker in the focus colour, with a glow. A diff mark keeps
+ * its colour (the selection adds the width and the glow). A lane or pool is
+ * drawn plainer: a dashed border, no glow. Exports draw in a viewer of their
+ * own and never carry it.
  */
-.djs-element.selected .djs-visual {
-  filter: drop-shadow(0 0 2px var(--vscode-focusBorder, #0078d4)) drop-shadow(0 0 3px var(--vscode-focusBorder, #0078d4));
+.djs-shape.ls-selected:not(.ls-selected-own-width):not(.ls-selected-lane) .djs-visual > :first-child,
+.djs-connection.ls-selected .djs-visual > path {
+  stroke-width: 3px !important;
+}
+
+.djs-shape.ls-selected:not(.ls-diff-added):not(.ls-diff-changed) .djs-visual > :first-child,
+.djs-connection.ls-selected:not(.ls-diff-added):not(.ls-diff-changed) .djs-visual > path {
+  stroke: var(--ls-selection) !important;
+}
+
+.djs-element.ls-selected:not(.ls-selected-lane) .djs-visual {
+  filter: drop-shadow(0 0 1px var(--ls-selection)) drop-shadow(0 0 4px var(--ls-selection));
+}
+
+.djs-shape.ls-selected.ls-selected-lane .djs-visual > :first-child {
+  stroke-width: 2px !important;
+  stroke-dasharray: 6 4;
 }
 
 /* ---- Side panel ------------------------------------------------------- */
@@ -816,4 +849,46 @@ table.grid td {
 .trace-body .link {
   text-align: left;
   word-break: break-word;
+}
+
+/* Trace split button: the main part and the arrow of its menu, as one control. */
+.split .split-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.split .split-arrow {
+  min-width: 0;
+  padding: 2px 4px;
+  border-left: 1px solid var(--vscode-button-separator, var(--vscode-widget-border, transparent));
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.count-badge {
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 0.85em;
+  line-height: 14px;
+  text-align: center;
+}
+
+.count-badge[hidden] {
+  display: none;
+}
+
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menu-item:disabled:hover {
+  background: none;
+  color: inherit;
 }
