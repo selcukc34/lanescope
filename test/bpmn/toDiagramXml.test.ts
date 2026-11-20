@@ -381,13 +381,13 @@ describe('layoutProcess', () => {
     expect(layout.shapes.get('t1')!.x).toBeLessThan(5000);
   });
 
-  it('draws a sub-process collapsed and skips its inner nodes', async () => {
+  it('draws a sub-process collapsed and skips its inner nodes, without a warning (it opens as a level of its own)', async () => {
     const p = smallProcess();
     p.nodes[1] = node('t1', 'subProcess', { laneId: 'l1' });
     p.nodes.push(node('inner1', 'task', { parentId: 't1' }), node('inner2', 'task', { parentId: 't1' }));
     p.flows.push({ id: 'fi', name: '', sourceId: 'inner1', targetId: 'inner2', isDefault: false });
     const { xml, layout, warnings } = await toDiagramXml(p);
-    expect(warnings).toEqual([expect.stringContaining('Sub-process "t1" is drawn collapsed; its 2 inner node(s)')]);
+    expect(warnings).toEqual([]);
     expect(layout.shapes.get('t1')).toMatchObject(TASK_SIZE);
     expect(layout.shapes.has('inner1')).toBe(false);
     expect(layout.edges.has('fi')).toBe(false);

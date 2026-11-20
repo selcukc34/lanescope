@@ -299,12 +299,15 @@ function markChanges(msg: RenderMessage): void {
  */
 function revealElement(id: string): void {
   if (!current) return;
-  const element = viewer.get<ElementRegistry>('elementRegistry').get(id);
-  if (!element) return;
+  const registry = viewer.get<ElementRegistry>('elementRegistry');
+  // Not drawn at this level (inside a collapsed sub-process): the sub-process that holds it.
+  const shownId = [id, ...(current.diff?.enclosing?.[id] ?? [])].find((x) => registry.get(x) !== undefined);
+  if (shownId === undefined) return;
+  const element = registry.get(shownId)!;
   viewer.get<Selection>('selection').select(element);
   // Scrolls only when the element is (partly) out of view; the zoom stays.
   canvas().scrollToElement(element, 80);
-  panel.select(id);
+  panel.select(shownId);
   panel.showTab('details');
 }
 

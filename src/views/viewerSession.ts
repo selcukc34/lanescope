@@ -26,8 +26,9 @@
 // Settings: extension settings (showScripts) are passed in and updated with
 // updateSettings(); a change re-renders the open view, keeping the zoom.
 //
-// Drill-down: "openCallee" opens a called service or linked process as a
-// diagram one level below the shown one (./navigation). Service diagrams are
+// Drill-down: "openCallee" opens a called service, a linked process or the
+// inside of a sub-process as a diagram one level below the shown one
+// (./navigation, src/model/subProcess). Service diagrams are
 // read on first open, not with the package, and cached with it. The path
 // below the chosen process is kept across toggles and settings; a reload
 // resolves it again and stays at the deepest level that still exists. Picking
@@ -51,13 +52,16 @@
 // (a touch, Bob writing the same process again) keeps the base, so the
 // changes stay on screen.
 // The comparison covers processes only: a drawn service diagram or linked
-// process gets a note instead.
+// process gets a note instead. A sub-process opened from the chosen process
+// (at any depth, through sub-processes only) shows the comparison of the
+// chosen process; its marks fall on the elements drawn there.
 
 import * as path from 'node:path';
 import { diffProcess, matchProcess } from '../diff/diff';
 import { toDiagramXml } from '../bpmn/toDiagramXml';
 import { BPMN_EXPORT_COMMENT } from './exportFiles';
 import type { Process, ProcessPackage } from '../model/model';
+import { findSubProcess, isSubProcessLevelId, SUB_LEVEL_PREFIX, subProcessDiagram, subProcessLevelId } from '../model/subProcess';
 import { MAX_PATH_DEPTH, openInPath, resolvePath } from './navigation';
 import {
   DEFAULT_VIEW_OPTIONS,
@@ -413,8 +417,8 @@ export class ViewerSession {
     const pkg = good.loaded.pkg;
     const root = pkg.processes.find((p) => p.id === good.render.rootProcessId);
     if (!root) throw new Error('The shown process is no longer in the file.');
-    const resolved = await resolvePath<Level>([processLevelId(root), ...good.below], (id, depth) =>
-      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id),
+    const resolved = await resolvePath<Level>([processLevelId(root), ...good.below], (id, depth, above) =>
+      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id, above),
     );
     if (resolved.missing !== undefined) throw new Error('The shown diagram is no longer in the file.');
     const process = resolved.levels[resolved.levels.length - 1].value.process;
@@ -484,7 +488,7 @@ export class ViewerSession {
       );
       // A package that differs from the shown one: the shown one becomes the previous version.
       const previous = this.good && this.good.loaded !== loaded && this.differs(this.good.loaded, loaded, plan.root) ? this.good.loaded : this.previous;
-      const diff = this.diffView(loaded, plan.root, drawn.value.process, plan.levels.length > 1, previous);
+      const diff = this.diffView(loaded, plan.root, plan.levels.slice(1).map((l) => l.value.process), previous);
       const render: RenderMessage = diff ? { ...built, diff } : built;
       result = { loaded, render, below, previous };
     } catch (err) {
@@ -534,8 +538,8 @@ export class ViewerSession {
     }
     const jumped = open !== undefined && path[0] === rootId && openInPath(open.path, open.calleeId).kind === 'jump';
 
-    const resolved = await resolvePath<Level>(path, (id, depth) =>
-      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id),
+    const resolved = await resolvePath<Level>(path, (id, depth, above) =>
+      depth === 0 ? { process: root, warnings: [] } : this.level(pkg, id, above),
     );
     if (jumped && resolved.missing === undefined) {
       const at = resolved.levels[resolved.levels.length - 1].value.process;
@@ -566,7 +570,7 @@ export class ViewerSession {
    * The comparison of the chosen process with the base: the picked file, else
    * the previous version; undefined when there is neither.
    */
-  private diffView(loaded: Loaded, root: Process, drawn: Process, below: boolean, previous: Loaded | undefined): DiffView | undefined {
+  private diffView(loaded: Loaded, root: Process, below: Process[], previous: Loaded | undefined): DiffView | undefined {
     const base: Base | undefined =
       this.fileBase ?? (previous ? { kind: 'previous', loaded: previous, label: this.deps.fileName } : undefined);
     if (!base) return undefined;
@@ -581,18 +585,35 @@ export class ViewerSession {
       marks: {},
     };
     // Like the validation rules, the comparison is about processes, not service diagrams.
-    if (below || (drawn.source?.kind ?? 'bpd') !== 'bpd') return { ...empty, note: PROCESSES_ONLY_NOTE };
+    // The inside of a sub-process of the chosen process is part of it.
+    const drawn = below[below.length - 1] ?? root;
+    if (below.some((p) => !p.subProcess) || (drawn.source?.kind ?? 'bpd') !== 'bpd') return { ...empty, note: PROCESSES_ONLY_NOTE };
     const baseProcess = matchProcess(base.loaded.pkg, root, loaded.pkg);
     if (!baseProcess) {
       const where = base.kind === 'file' ? `"${base.label}"` : 'the previous version';
       return { ...empty, note: `No process in ${where} matches "${root.name || root.id}".` };
     }
     const d = diffProcess(baseProcess, root, base.loaded.pkg.dataTypes, loaded.pkg.dataTypes);
-    return { ...empty, counts: d.counts, added: d.added, removed: d.removed, changed: d.changed, marks: d.marks };
+    return {
+      ...empty,
+      counts: d.counts,
+      added: d.added,
+      removed: d.removed,
+      changed: d.changed,
+      marks: d.marks,
+      ...(Object.keys(d.enclosing).length > 0 ? { enclosing: d.enclosing } : {}),
+    };
   }
 
-  /** A level below the chosen process: a linked process of the package, or a service diagram. */
-  private async level(pkg: ProcessPackage, id: string): Promise<Level | undefined> {
+  /**
+   * A level below the chosen process: the inside of a sub-process of the
+   * level above, a linked process of the package, or a service diagram.
+   */
+  private async level(pkg: ProcessPackage, id: string, above: Level | undefined): Promise<Level | undefined> {
+    if (isSubProcessLevelId(id)) {
+      const diagram = above ? subProcessDiagram(above.process, id) : undefined;
+      return diagram ? { process: diagram, warnings: [] } : undefined;
+    }
     const linked = pkg.processes.find((p) => processLevelId(p) === id);
     if (linked) return { process: linked, warnings: [] };
     const diagram = await pkg.calleeDiagrams?.read(id);
@@ -605,6 +626,13 @@ export class ViewerSession {
     if (shown) return shown.name;
     const process = pkg.processes.find((p) => processLevelId(p) === id);
     if (process) return process.name || id;
+    if (isSubProcessLevelId(id)) {
+      for (const p of pkg.processes) {
+        const sub = findSubProcess(p, id);
+        if (sub) return sub.name || subProcessLevelId(sub);
+      }
+      return id.slice(SUB_LEVEL_PREFIX.length);
+    }
     return pkg.calleeDiagrams?.name(id) ?? id;
   }
 

@@ -156,8 +156,10 @@ export interface NodeDetails {
   callee?: string;
   /** A linked process in the package: the id of that process in `processes`. */
   openProcessId?: string;
-  /** A call that opens as a diagram: the level id to send in openCallee. */
+  /** A call or sub-process that opens as a diagram: the level id to send in openCallee. */
   openCallee?: string;
+  /** Sub-processes: how many nodes the diagram of its inside draws (its direct children). */
+  containsNodes?: number;
   /** A call that does not open as a diagram, and why: "Not in this export", "External service". */
   openUnavailable?: string;
   /** REST steps of a service: the external service and its operation. */
@@ -247,6 +249,12 @@ export interface DiffView {
   changed: DiffEntry[];
   /** Diagram element id → how to mark it. */
   marks: Record<string, DiffMark>;
+  /**
+   * Element id → the sub-processes it is inside, nearest first, for the
+   * elements of the lists that are inside one: a row of an element that is
+   * not drawn at the shown level selects the sub-process that holds it.
+   */
+  enclosing?: Record<string, string[]>;
   /** Why there is nothing to list, e.g. a service diagram is drawn or no process matches. */
   note?: string;
 }

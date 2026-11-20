@@ -32,6 +32,7 @@ import {
   changesTabTitle,
   type ChangeRow,
   comparedWithText,
+  containsText,
   insideSummary,
   isLinkedType,
   NOTHING_TO_COMPARE,
@@ -316,15 +317,18 @@ function renderNode(d: NodeDetails, ctx: NodeContext): HTMLElement {
   if (d.openCallee !== undefined) {
     const calleeId = d.openCallee;
     const isProcess = d.openProcessId !== undefined;
-    const button = h(
-      'button',
-      { class: 'button', type: 'button', title: isProcess ? 'Open the called process (or double-click the activity)' : 'Open the called service as a diagram (or double-click the activity)' },
-      isProcess ? 'Open process' : 'Open diagram',
-    );
+    const isSub = d.containsNodes !== undefined;
+    const [title, label] = isSub
+      ? ['Open the inside of the sub-process as a diagram (or double-click it)', 'Open sub-process']
+      : isProcess
+        ? ['Open the called process (or double-click the activity)', 'Open process']
+        : ['Open the called service as a diagram (or double-click the activity)', 'Open diagram'];
+    const button = h('button', { class: 'button', type: 'button', title }, label);
     button.addEventListener('click', () => ctx.openCallee(calleeId));
     open = button;
   } else if (d.openUnavailable !== undefined) {
-    open = h('span', { class: 'muted', title: 'This call cannot be opened as a diagram' }, d.openUnavailable);
+    const title = d.containsNodes !== undefined ? 'This sub-process holds no nodes' : 'This call cannot be opened as a diagram';
+    open = h('span', { class: 'muted', title }, d.openUnavailable);
   }
   return h(
     'div',
@@ -335,6 +339,7 @@ function renderNode(d: NodeDetails, ctx: NodeContext): HTMLElement {
       ['Original type', d.originalType, true],
       ['Service type', d.serviceType],
       ['Calls', d.calls],
+      ['Contains', d.containsNodes !== undefined ? containsText(d.containsNodes) : undefined],
       ['Event', d.eventType],
       ['Attached to', d.boundary?.attachedTo],
       ['Catches', d.boundary ? catchesText(d.boundary) : undefined],

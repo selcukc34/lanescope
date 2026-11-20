@@ -35,7 +35,7 @@ export async function twxToProcessPackage(archive: TwxArchive): Promise<ProcessP
     if (!id.startsWith('25.')) continue;
     let result;
     try {
-      result = readBpd(xml, resolver);
+      result = readBpd(xml, resolver, (other) => archive.objects.get(other));
     } catch (err) {
       warnings.push(`Cannot read objects/${id}.xml: ${(err as Error).message}`);
       continue;

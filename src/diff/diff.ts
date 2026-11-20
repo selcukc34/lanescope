@@ -27,6 +27,13 @@
 // flows, process variables and data type fields. Not compared: positions,
 // sizes, ports and label positions, and the ids themselves.
 //
+// Sub-processes. A sub-process with added, changed or removed elements inside
+// it (at any depth) is marked changed, and its entry says "Inner changes: N"
+// (N entries inside it). An added sub-process gets no such line: everything
+// in it is new. The elements inside a sub-process list the sub-processes
+// that hold them (`enclosing`), so a view that draws the sub-process
+// collapsed can point at it.
+//
 // Script text and mapped values never appear in the result: a changed
 // script is reported as "Script changed", a changed mapping by the names of
 // its parameters only.
@@ -80,6 +87,8 @@ export interface ProcessDiff {
   counts: { added: number; removed: number; changed: number };
   /** Current element id → mark, for the nodes, flows and lanes that were added or changed. */
   marks: Record<string, DiffMark>;
+  /** Current id of an added or changed node or flow inside a sub-process → the sub-processes around it, nearest first. */
+  enclosing: Record<string, string[]>;
   nodeMatches: NodeMatchCounts;
 }
 
@@ -141,6 +150,7 @@ export function diffProcess(base: Process, current: Process, baseTypes: DataType
   );
   diffList(out, 'lane', base.lanes, current.lanes, lanes, (l) => laneLabel(l), compareLanes);
   const marks = out.marks;
+  const enclosing = rollUpSubProcesses(out, base, current, nodes);
 
   const types = diffDataTypes(baseTypes, currentTypes);
   added.push(...types.added);
@@ -153,8 +163,75 @@ export function diffProcess(base: Process, current: Process, baseTypes: DataType
     changed,
     counts: { added: added.length, removed: removed.length, changed: changed.length },
     marks,
+    enclosing,
     nodeMatches,
   };
+}
+
+/**
+ * Counts the entries inside each sub-process of `current` (removed ones by
+ * the base sub-process paired with it), marks those sub-processes changed
+ * and adds "Inner changes: N" to their entry, creating the entry when the
+ * sub-process itself did not change. Returns the sub-processes around each
+ * added or changed node and flow.
+ */
+function rollUpSubProcesses(out: Lists, base: Process, current: Process, nodes: Matching): Record<string, string[]> {
+  const enclosing: Record<string, string[]> = {};
+  if (!current.nodes.some((n) => n.parentId !== undefined) && !base.nodes.some((n) => n.parentId !== undefined)) return enclosing;
+
+  const currentParent = new Map(current.nodes.map((n) => [n.id, n.parentId]));
+  const baseParent = new Map(base.nodes.map((n) => [n.id, n.parentId]));
+  const currentSource = new Map(current.flows.map((f) => [f.id, f.sourceId]));
+  const baseSource = new Map(base.flows.map((f) => [f.id, f.sourceId]));
+  /** The sub-processes around a node (for a flow: around its source), nearest first. */
+  const around = (nodeId: string | undefined, parents: Map<string, string | undefined>): string[] => {
+    const chain: string[] = [];
+    let at = nodeId !== undefined ? parents.get(nodeId) : undefined;
+    while (at !== undefined && parents.has(at) && !chain.includes(at)) {
+      chain.push(at);
+      at = parents.get(at);
+    }
+    return chain;
+  };
+  const inner = new Map<string, number>();
+  const count = (subIds: string[]) => {
+    for (const id of subIds) inner.set(id, (inner.get(id) ?? 0) + 1);
+  };
+
+  for (const e of [...out.added, ...out.changed]) {
+    if ((e.elementType !== 'node' && e.elementType !== 'flow') || e.currentId === undefined) continue;
+    const chain = around(e.elementType === 'node' ? e.currentId : currentSource.get(e.currentId), currentParent);
+    if (chain.length === 0) continue;
+    enclosing[e.currentId] = chain;
+    count(chain);
+  }
+  for (const e of out.removed) {
+    if ((e.elementType !== 'node' && e.elementType !== 'flow') || e.baseId === undefined) continue;
+    const chain = around(e.elementType === 'node' ? e.baseId : baseSource.get(e.baseId), baseParent);
+    count(chain.map((id) => nodes.toCurrent.get(id)).filter((id): id is string => id !== undefined));
+  }
+
+  const currentNodes = new Map(current.nodes.map((n) => [n.id, n]));
+  for (const [subId, n] of inner) {
+    const node = currentNodes.get(subId);
+    if (!node || out.marks[subId] === 'added') continue;
+    const line = `Inner changes: ${n}`;
+    const entry = out.changed.find((e) => e.elementType === 'node' && e.currentId === subId);
+    if (entry) {
+      entry.changes.push(line);
+    } else {
+      const baseId = nodes.toBase.get(subId);
+      out.changed.push({ elementType: 'node', currentId: subId, ...(baseId !== undefined ? { baseId } : {}), label: nodeLabel(node), changes: [line] });
+    }
+    out.marks[subId] = 'changed';
+  }
+  // Node entries stay in model order, before flows and lanes.
+  const order = new Map(current.nodes.map((n, i) => [n.id, i]));
+  const nodeEntries = out.changed.filter((e) => e.elementType === 'node').sort((a, b) => order.get(a.currentId!)! - order.get(b.currentId!)!);
+  const head = out.changed.filter((e) => e.elementType === 'process');
+  const tail = out.changed.filter((e) => e.elementType !== 'process' && e.elementType !== 'node');
+  out.changed.splice(0, out.changed.length, ...head, ...nodeEntries, ...tail);
+  return enclosing;
 }
 
 interface Lists {

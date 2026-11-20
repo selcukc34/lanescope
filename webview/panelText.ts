@@ -103,15 +103,19 @@ export interface ChangeGroups {
 /**
  * Rows of the Changes tab. `drawn` holds the ids of the drawn elements
  * (RenderMessage.elements): a row links to its element only when the
- * element is in the diagram.
+ * element is in the diagram, or a sub-process around it is (drawn collapsed).
  */
-export function changeGroups(diff: Pick<DiffView, 'added' | 'changed' | 'removed'>, drawn: Readonly<Record<string, unknown>>): ChangeGroups {
+export function changeGroups(
+  diff: Pick<DiffView, 'added' | 'changed' | 'removed' | 'enclosing'>,
+  drawn: Readonly<Record<string, unknown>>,
+): ChangeGroups {
+  const isDrawn = (id: string) => Object.prototype.hasOwnProperty.call(drawn, id);
   const row = (e: DiffEntry, status: ChangeStatus): ChangeRow => {
     const linkable =
       status !== 'removed' &&
       (e.elementType === 'node' || e.elementType === 'flow' || e.elementType === 'lane') &&
       e.currentId !== undefined &&
-      Object.prototype.hasOwnProperty.call(drawn, e.currentId);
+      (isDrawn(e.currentId) || (diff.enclosing?.[e.currentId] ?? []).some(isDrawn));
     return { status, label: e.label, changes: [...e.changes], ...(linkable ? { revealId: e.currentId } : {}) };
   };
   const inDiagram = (e: DiffEntry) => e.elementType !== 'dataType';
@@ -125,4 +129,9 @@ export function changeGroups(diff: Pick<DiffView, 'added' | 'changed' | 'removed
       ...diff.removed.filter((e) => !inDiagram(e)).map((e) => row(e, 'removed')),
     ],
   };
+}
+
+/** "Contains" of a sub-process: "4 nodes", "1 node". */
+export function containsText(count: number): string {
+  return `${count} ${count === 1 ? 'node' : 'nodes'}`;
 }

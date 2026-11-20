@@ -76,6 +76,16 @@ export interface Process {
   outputs?: DataParameter[];
   /** TWX: what kind of object the diagram was read from. Undefined for Bob output (a process). */
   source?: ProcessOrigin;
+  /** Set on the diagram of a sub-process opened as a level of its own (./subProcess). */
+  subProcess?: SubProcessLevel;
+}
+
+/** What a sub-process diagram was derived from. */
+export interface SubProcessLevel {
+  /** Level id of the diagram (see src/views/navigation): "sub:" and the sub-process's identity. */
+  levelId: string;
+  /** True for an event sub-process (triggeredByEvent). */
+  eventSubProcess: boolean;
 }
 
 export interface ProcessOrigin {

@@ -17,6 +17,7 @@ import type {
 } from '../model/model';
 import { toDiagramXml } from '../bpmn/toDiagramXml';
 import { KIND_LABELS } from '../model/labels';
+import { childCounts, subProcessLevelId } from '../model/subProcess';
 import { validateProcess } from '../validate/validate';
 import {
   DEFAULT_VIEWER_SETTINGS,
@@ -39,7 +40,7 @@ import {
 
 /** A level below the chosen process: what to draw instead of it, and the breadcrumb. */
 export interface LevelView {
-  /** The diagram to draw: a service, or a linked process. */
+  /** The diagram to draw: a service, a linked process or a sub-process. */
   process: Process;
   /** Every open level, the chosen process first and `process` last. */
   path: LevelSummary[];
@@ -48,13 +49,14 @@ export interface LevelView {
   note?: string;
 }
 
-/** The level id of a process of a package (see ./navigation). */
+/** The level id of a process of a package, or of a sub-process diagram (see ./navigation). */
 export function processLevelId(process: Process): string {
-  return process.originalId ?? process.id;
+  return process.subProcess?.levelId ?? process.originalId ?? process.id;
 }
 
-/** "Process", "Service flow", "Client-side human service". */
+/** "Process", "Service flow", "Client-side human service", "Sub-process", "Event sub-process". */
 export function processKindLabel(process: Process): string {
+  if (process.subProcess) return process.subProcess.eventSubProcess ? 'Event sub-process' : 'Sub-process';
   if (process.source?.kind === 'serviceFlow') return 'Service flow';
   if (process.source?.kind === 'humanService') return 'Client-side human service';
   return 'Process';
@@ -108,6 +110,7 @@ export async function buildRenderMessage(
     outgoingBySource.set(flow.sourceId, list);
   }
 
+  const insideCounts = childCounts(process);
   for (const node of process.nodes) {
     if (layout.hiddenNodeIds.has(node.id)) continue;
     const lane = node.laneId !== undefined ? (laneById.get(node.laneId)?.name ?? node.laneId) : undefined;
@@ -140,7 +143,7 @@ export async function buildRenderMessage(
     }
     const linked = called?.id.startsWith('25.') ? processByCalledId.get(called.id) : undefined;
     if (linked !== undefined) details.openProcessId = linked;
-    Object.assign(details, openability(node, pkg, linked !== undefined));
+    Object.assign(details, node.kind === 'subProcess' ? subProcessOpenability(node, insideCounts.get(node.id) ?? 0) : openability(node, pkg, linked !== undefined));
     if (node.restOperation) {
       details.rest = { service: node.restOperation.service, ...(node.restOperation.operation ? { operation: node.restOperation.operation } : {}) };
     }
@@ -181,7 +184,8 @@ export async function buildRenderMessage(
   }
 
   // The validation rules are about processes (BPDs, Bob output); service diagrams are not checked.
-  const isProcess = (process.source?.kind ?? 'bpd') === 'bpd';
+  // A sub-process diagram is not checked either: the rules ran on the process that holds it.
+  const isProcess = (process.source?.kind ?? 'bpd') === 'bpd' && !process.subProcess;
   const issues = isProcess ? validateProcess(process).map((i) => i.message) : [];
   const warnings = [...pkg.warnings, ...(level?.warnings ?? []), ...issues, ...diagram.warnings];
 
@@ -265,6 +269,11 @@ function coachDetails(c: CoachSummary): CoachDetails {
       ...(k.binding !== undefined ? { binding: k.binding } : {}),
     })),
   };
+}
+
+/** A sub-process opens as a diagram of its inside, unless it holds no node. */
+function subProcessOpenability(node: FlowNode, count: number): Pick<NodeDetails, 'openCallee' | 'openUnavailable' | 'containsNodes'> {
+  return count > 0 ? { openCallee: subProcessLevelId(node), containsNodes: count } : { openUnavailable: 'Empty sub-process', containsNodes: 0 };
 }
 
 /** Whether a call opens as a diagram (openCallee), or why it does not (openUnavailable). */
