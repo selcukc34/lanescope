@@ -2,8 +2,9 @@
 // model of the whole open file: every process (with the nodes inside its
 // sub-processes), every service of a TWX export, called or not (its diagram,
 // as the viewer draws it when the service is opened), and every business
-// object. It also works out where each object is drawn and who calls each
-// service: activities of processes and steps of other services. It reads nothing new itself: processes come with the package, the
+// object. Who calls whom comes from src/model/callGraph; from it the index
+// works out where each object is drawn and who calls each service and
+// linked process: activities of processes and steps of services. It reads nothing new itself: processes come with the package, the
 // service diagrams from the package's CalleeDiagramSource (cached there).
 // Packed toolkits are not read. Pure: no vscode.
 //
@@ -11,7 +12,8 @@
 // index only counts what it left out.
 
 import { KIND_LABELS } from '../model/labels';
-import type { CalledElement, CoachSummary, DataMapping, DataParameter, FlowNode, Process, ProcessPackage, ProcessVariable, ServiceEntry } from '../model/model';
+import { buildCallGraph, readServiceDiagrams, type CallNodeRef } from '../model/callGraph';
+import type { CalledElement, CoachSummary, DataMapping, DataParameter, FlowNode, Process, ProcessPackage, ProcessVariable } from '../model/model';
 import { subProcessLevels } from '../model/subProcess';
 import type { SearchCaller, SearchField, SearchGroup, SearchIndex, SearchLevel, SearchObject, SearchTarget } from './search';
 
@@ -56,67 +58,64 @@ class IndexBuilder {
 /** The search index of a whole package: processes, services and business objects. */
 export async function buildSearchIndex(pkg: ProcessPackage, options: SearchIndexOptions): Promise<SearchIndex> {
   const b = new IndexBuilder(options.showScripts);
-  const source = pkg.calleeDiagrams;
-  /** The service ids a diagram calls directly. */
-  const callsOf = (p: Process) => {
-    if (!source) return [];
-    const ids = p.nodes.flatMap((n) => (n.calledElement ? [source.key(n.calledElement.id)] : [])).filter((id) => id.startsWith('1.'));
-    return [...new Set(ids)];
+  const services = await readServiceDiagrams(pkg);
+  const graph = await buildCallGraph(pkg, services);
+
+  // A service opens below the first activity of a process that calls it, else on its own.
+  const levelOf = (ref: CallNodeRef): SearchLevel => {
+    if (ref.kind === 'process') return { processId: ref.id, below: [] };
+    const c = graph.callers(ref).find((s) => s.from.kind === 'process');
+    return c ? { processId: c.from.id, below: [...c.levels, ref.id] } : { serviceId: ref.id, below: [] };
   };
+  const callersOf = (ref: CallNodeRef): SearchCaller[] =>
+    graph.callers(ref).map((site) => {
+      const owner = levelOf(site.from);
+      return {
+        via: site.from.kind,
+        ownerId: site.from.id,
+        ownerName: graph.node(site.from)?.name ?? site.from.id,
+        nodeId: site.nodeId,
+        name: site.name,
+        levels: site.levels,
+        level: { ...owner, below: [...owner.below, ...site.levels] },
+      };
+    });
+  /** The services a diagram calls directly, which the "Shown process" scope takes in. */
+  const callsOf = (ref: CallNodeRef) => [...new Set(graph.callees(ref).filter((s) => s.to.kind === 'service').map((s) => s.to.id))];
 
   for (const process of pkg.processes) {
-    const o = b.object({ kind: 'process', label: 'Process', name: process.name || process.id, id: process.id, level: { processId: process.id, below: [] }, calls: callsOf(process) });
+    const ref: CallNodeRef = { kind: 'process', id: process.id };
+    const callers = callersOf(ref);
+    const o = b.object({
+      kind: 'process',
+      label: 'Process',
+      name: process.name || process.id,
+      id: process.id,
+      levelId: process.originalId ?? process.id,
+      ...(callers.length > 0 ? { calledBy: callers } : {}),
+      level: levelOf(ref),
+      calls: callsOf(ref),
+    });
     indexProcess(b, o, process, 'Process');
   }
 
-  if (source) {
-    // First every diagram, so that every caller (activities of processes, steps of services) is known.
-    const services: Array<{ entry: ServiceEntry; diagram?: Process }> = [];
-    for (const entry of source.list()) {
-      const diagram = source.openability(entry.id).openable ? (await source.read(entry.id))?.process : undefined;
-      services.push({ entry, ...(diagram ? { diagram } : {}) });
-    }
-    const processCallers = new Map<string, SearchCaller[]>();
-    for (const p of pkg.processes) {
-      for (const n of p.nodes) {
-        const id = n.calledElement ? source.key(n.calledElement.id) : '';
-        if (!id.startsWith('1.')) continue;
-        const caller: SearchCaller = { via: 'process', ownerName: p.name || p.id, nodeId: n.id, name: n.name || n.id, level: { processId: p.id, below: subProcessLevels(p, n) } };
-        processCallers.set(id, [...(processCallers.get(id) ?? []), caller]);
-      }
-    }
-    // A service opens below the first activity of a process that calls it, else on its own.
-    const levelOf = (id: string): SearchLevel => {
-      const c = processCallers.get(id)?.[0];
-      return c ? { processId: c.level.processId, below: [...c.level.below, id] } : { serviceId: id, below: [] };
-    };
-    const serviceCallers = new Map<string, SearchCaller[]>();
-    for (const { entry, diagram } of services) {
-      if (!diagram) continue;
-      const owner = levelOf(entry.id);
-      for (const n of diagram.nodes) {
-        const id = n.calledElement ? source.key(n.calledElement.id) : '';
-        if (!id.startsWith('1.') || id === entry.id) continue;
-        const caller: SearchCaller = { via: 'service', ownerName: entry.name, nodeId: n.id, name: n.name || n.id, level: { ...owner, below: [...owner.below, ...subProcessLevels(diagram, n)] } };
-        serviceCallers.set(id, [...(serviceCallers.get(id) ?? []), caller]);
-      }
-    }
-    for (const { entry, diagram } of services) {
-      const o = b.object({
-        kind: 'service',
-        label: entry.kind,
-        name: entry.name,
-        id: entry.id,
-        calledBy: [...(processCallers.get(entry.id) ?? []), ...(serviceCallers.get(entry.id) ?? [])],
-        openable: diagram !== undefined,
-        ...(diagram ? { level: levelOf(entry.id), calls: callsOf(diagram) } : {}),
-      });
-      if (diagram) {
-        indexProcess(b, o, diagram, entry.kind);
-      } else {
-        const g = b.group(o, { type: 'root' }, entry.kind, entry.name, []);
-        b.add(g, 'Name', entry.name, { isName: true });
-      }
+  for (const { entry, diagram } of services) {
+    const ref: CallNodeRef = { kind: 'service', id: entry.id };
+    const o = b.object({
+      kind: 'service',
+      label: entry.kind,
+      name: entry.name,
+      id: entry.id,
+      levelId: entry.id,
+      calledBy: callersOf(ref),
+      openable: diagram !== undefined,
+      ...(diagram ? { level: levelOf(ref), calls: callsOf(ref) } : {}),
+    });
+    if (diagram) {
+      indexProcess(b, o, diagram, entry.kind);
+    } else {
+      const g = b.group(o, { type: 'root' }, entry.kind, entry.name, []);
+      b.add(g, 'Name', entry.name, { isName: true });
     }
   }
 

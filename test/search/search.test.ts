@@ -168,7 +168,7 @@ describe('search on Bob output', () => {
   it('has no scripts and no toolkits to leave out', () => {
     expect(bobIndex).toMatchObject({ scriptsOmitted: 0, toolkitsNotSearched: false });
     expect(SCRIPTS_NOT_SEARCHED).toBe('Scripts were not searched because lanescope.showScripts is off.');
-    expect(TOOLKITS_NOT_SEARCHED).toBe('Toolkits are not searched.');
+    expect(TOOLKITS_NOT_SEARCHED).toBe('Toolkits are not searched (toolkit contents cannot be opened in Lanescope yet).');
   });
 });
 
@@ -190,7 +190,13 @@ describe('search on the synthetic TWX export', () => {
     const bpd = twx.processes[0].id;
     // Drawn below the activity that calls it; it calls Apply Discount.
     expect(price).toMatchObject({ label: 'Service flow', openable: true, level: { processId: bpd, below: [PRICE_SERVICE_ID] }, calls: [DISCOUNT_SERVICE_ID] });
-    expect(price.calledBy).toEqual([{ via: 'process', ownerName: 'Synthetic Order', nodeId: 'node_review', name: 'Review Order', level: { processId: bpd, below: [] } }]);
+    expect(price.calledBy).toEqual([
+      { via: 'process', ownerId: bpd, ownerName: 'Synthetic Order', nodeId: 'node_review', name: 'Review Order', levels: [], level: { processId: bpd, below: [] } },
+    ]);
+    expect(price.levelId).toBe(PRICE_SERVICE_ID);
+    // A process nothing calls has no callers to list.
+    expect(index.objects[0].calledBy).toBeUndefined();
+    expect(index.objects[0].levelId).toBe(twx.processes[0].originalId);
     expect(index.objects[0]).toMatchObject({ kind: 'process', level: { processId: bpd, below: [] }, calls: [PRICE_SERVICE_ID] });
   });
 
@@ -201,9 +207,11 @@ describe('search on the synthetic TWX export', () => {
     expect(service.object.calledBy).toEqual([
       {
         via: 'service',
+        ownerId: PRICE_SERVICE_ID,
         ownerName: 'Price Order',
         nodeId: (callStep.group.target as { id: string }).id,
         name: 'Call Discount',
+        levels: [],
         // The step is drawn in Price Order, which opens below Review Order.
         level: { processId: twx.processes[0].id, below: [PRICE_SERVICE_ID] },
       },

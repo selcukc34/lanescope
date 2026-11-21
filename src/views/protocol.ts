@@ -321,6 +321,12 @@ export interface RenderMessage {
    * picker still holds the chosen process.
    */
   serviceRoot?: true;
+  /**
+   * Changes when what the search looks at changes (another read of the file,
+   * a showScripts change); the webview searches again only then, or when
+   * the query or the scope changes, never on navigation.
+   */
+  searchVersion: number;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */

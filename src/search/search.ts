@@ -10,7 +10,12 @@ export interface SearchObject {
   name: string;
   /** process: the process id of the package; service: its object id ("1.…"); dataType: its name. */
   id: string;
-  /** Services: the activities of processes, then the steps of services, that call it. */
+  /** The level id it opens with below a caller (a process: originalId ?? id; a service: its object id). */
+  levelId?: string;
+  /**
+   * What calls it (src/model/callGraph): activities of processes, then steps
+   * of services. Always there for a service; for a process only when something calls it (a linked process).
+   */
   calledBy?: SearchCaller[];
   /** Services: true when it opens as a diagram. */
   openable?: boolean;
@@ -30,16 +35,20 @@ export interface SearchLevel {
   below: string[];
 }
 
-/** An activity of a process, or a step of a service, that calls a service. */
+/** An activity of a process, or a step of a service, that calls a service or a linked process. */
 export interface SearchCaller {
   /** A process's activity or a service's step. */
   via: 'process' | 'service';
+  /** The process (its id in the package) or service (its object id) that holds it. */
+  ownerId: string;
   /** Name of the process or service that holds it. */
   ownerName: string;
   /** Diagram id of the activity or step. */
   nodeId: string;
   name: string;
-  /** Where it is drawn. */
+  /** Sub-process levels of the owner's diagram around it, outermost first. */
+  levels: string[];
+  /** Where it is drawn when the viewer goes to it. */
   level: SearchLevel;
 }
 
@@ -284,4 +293,4 @@ export function matchesSummary(result: Pick<SearchResult, 'shown' | 'objects'>):
 export const SCRIPTS_NOT_SEARCHED = 'Scripts were not searched because lanescope.showScripts is off.';
 
 /** The note below the results when the file packs toolkits. */
-export const TOOLKITS_NOT_SEARCHED = 'Toolkits are not searched.';
+export const TOOLKITS_NOT_SEARCHED = 'Toolkits are not searched (toolkit contents cannot be opened in Lanescope yet).';

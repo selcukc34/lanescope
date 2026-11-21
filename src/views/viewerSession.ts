@@ -254,6 +254,9 @@ export class ViewerSession {
   private searchIndex: { pkg: ProcessPackage; showScripts: boolean; index: Promise<SearchIndex> } | undefined;
   /** Id of the latest search request; answers to older ones are not posted. */
   private latestSearch = -1;
+  /** What the last render's search index is built from, and its version (RenderMessage.searchVersion). */
+  private searchBasis: { pkg: ProcessPackage; showScripts: boolean } | undefined;
+  private searchVersion = 0;
   /** Read of the file the next render uses; cleared to force a re-read. */
   private loaded: Promise<Loaded> | undefined;
   /** Last package that produced a diagram, and that diagram. */
@@ -704,8 +707,14 @@ export class ViewerSession {
       // A service root is not part of the chosen process: like any service level, it gets the note.
       const diff = this.diffView(loaded, plan.root, plan.levels.slice(plan.serviceRoot !== undefined ? 0 : 1).map((l) => l.value.process), previous);
       const trace = this.traceView(loaded.pkg, plan.root);
+      const basis = this.searchBasis;
+      if (!basis || basis.pkg !== loaded.pkg || basis.showScripts !== this.settings.showScripts) {
+        this.searchBasis = { pkg: loaded.pkg, showScripts: this.settings.showScripts };
+        this.searchVersion++;
+      }
       const render: RenderMessage = {
         ...built,
+        searchVersion: this.searchVersion,
         ...(diff ? { diff } : {}),
         ...(trace ? { trace } : {}),
         ...(plan.serviceRoot !== undefined ? { serviceRoot: true as const } : {}),

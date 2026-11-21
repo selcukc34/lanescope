@@ -916,15 +916,181 @@ table.grid td {
   outline-offset: -1px;
 }
 
-.search-group {
+/* On body, not :root: VS Code sets the theme variables on html, the tests on body; body sees both. */
+body {
+  /* The kind of an object of the Search tab, as a thin left border; the icon and the label say it too. */
+  --ls-search-process: var(--vscode-charts-blue, var(--vscode-focusBorder));
+  --ls-search-service: var(--vscode-charts-purple, var(--vscode-focusBorder));
+  --ls-search-data: var(--vscode-charts-green, var(--vscode-focusBorder));
+}
+
+/* High contrast: one border colour, as the theme gives it. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --ls-search-process: var(--vscode-contrastBorder);
+  --ls-search-service: var(--vscode-contrastBorder);
+  --ls-search-data: var(--vscode-contrastBorder);
+}
+
+.ls-icon {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -2px;
+}
+
+.search-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.search-summary {
+  color: var(--vscode-descriptionForeground);
+}
+
+.search-scope {
+  padding: 1px 4px;
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  font: inherit;
+}
+
+.search-info {
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border, transparent));
+  background: var(--vscode-textBlockQuote-background, transparent);
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
+.search-info p {
+  margin: 2px 0;
+}
+
+.search-object {
   margin: 0 0 10px;
+  border-left: 3px solid var(--ls-search-process);
+}
+
+.search-object.search-service {
+  border-left-color: var(--ls-search-service);
+}
+
+.search-object.search-dataType {
+  border-left-color: var(--ls-search-data);
+}
+
+/* The head of an object stays on top while its groups scroll by. */
+.search-object > summary {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 6px;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.search-object > summary::-webkit-details-marker {
+  display: none;
+}
+
+.search-object-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-object-line::before {
+  content: '▸';
+  width: 0.8em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.search-object[open] .search-object-line::before {
+  content: '▾';
+}
+
+.search-object-name {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.search-object-kind {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
+.search-object .count-badge {
+  margin-left: auto;
+}
+
+.search-called-by {
+  padding-left: calc(0.8em + 26px);
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.search-callers-box {
+  margin: 4px 0 2px 8px;
+}
+
+.search-callers-toggle {
+  font-size: 0.9em;
+}
+
+.search-callers {
+  list-style: none;
+  margin: 2px 0 4px;
+  padding: 0 0 0 8px;
+}
+
+.search-callers[hidden] {
+  display: none;
+}
+
+.search-group {
+  margin: 4px 0 6px 8px;
+}
+
+.search-group[data-depth='1'] {
+  margin-left: 20px;
+}
+
+.search-group[data-depth='2'] {
+  margin-left: 32px;
+}
+
+.search-group[data-depth='3'],
+.search-group[data-depth='4'] {
+  margin-left: 44px;
 }
 
 .search-head {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 5px;
   width: 100%;
+  padding: 1px 4px;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 2px;
   text-align: left;
   color: inherit;
   font-weight: 600;
@@ -937,47 +1103,68 @@ table.grid td {
 
 .search-list {
   list-style: none;
-  margin: 2px 0 0;
-  padding: 0 0 0 8px;
+  margin: 1px 0 0;
+  padding: 0 0 0 18px;
 }
 
-.search-hit {
+.search-row,
+.search-caller-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 8px;
-}
-
-.search-row {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 200px;
+  gap: 6px;
+  width: 100%;
   min-width: 0;
   padding: 2px 4px;
   border: none;
   border-radius: 2px;
   background: none;
   color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+.search-caller-row {
+  align-items: center;
+}
+
 .search-row:hover,
-.search-row:focus {
+.search-caller-row:hover,
+.search-head:hover {
   background: var(--vscode-list-hoverBackground);
 }
 
-.search-row:focus,
-.search-head:focus {
+.search-nav.active {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+  outline: 1px solid var(--vscode-list-focusOutline, transparent);
+  outline-offset: -1px;
+}
+
+.search-nav.active .muted,
+.search-nav.active .search-pill {
+  color: inherit;
+}
+
+.search-nav:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
 
-.search-label {
-  font-size: 0.9em;
+.search-pill {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 0.8em;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .search-snippet {
+  min-width: 0;
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.95em;
   word-break: break-word;
@@ -985,75 +1172,7 @@ table.grid td {
 
 .search-snippet mark {
   color: inherit;
-  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  background: var(--vscode-editor-findMatchHighlightBackground);
+  outline: 1px solid var(--vscode-editor-findMatchHighlightBorder, transparent);
   border-radius: 2px;
-}
-
-.search-caller {
-  font-size: 0.9em;
-}
-
-.badge.inside-badge {
-  background: var(--vscode-textLink-foreground);
-  color: var(--vscode-editor-background);
-}
-
-.search-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.search-scope {
-  padding: 1px 4px;
-  border: 1px solid var(--vscode-dropdown-border, transparent);
-  border-radius: 2px;
-  background: var(--vscode-dropdown-background);
-  color: var(--vscode-dropdown-foreground);
-  font: inherit;
-}
-
-.search-object {
-  margin: 0 0 8px;
-}
-
-.search-object > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 0;
-  cursor: pointer;
-  font-weight: 600;
-  word-break: break-word;
-}
-
-.search-object > summary .search-called-by {
-  font-weight: normal;
-}
-
-.search-object.shown > summary .search-object-name {
-  color: var(--vscode-textLink-foreground);
-}
-
-.search-object > .search-group {
-  margin-left: 12px;
-}
-
-.search-caller-anchor {
-  display: inline-flex;
-  flex-direction: column;
-}
-
-.search-callers {
-  list-style: none;
-  margin: 2px 0 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, transparent));
-  background: var(--vscode-menu-background, var(--vscode-editor-background));
-}
-
-.search-callers[hidden] {
-  display: none;
 }

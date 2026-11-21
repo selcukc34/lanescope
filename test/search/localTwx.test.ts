@@ -49,6 +49,17 @@ describe.skipIf(!hasLocalTwx('services'))('search of the whole of services.twx',
     expect(shownAs('Demo_MainProcess', 'Decide', 'shown').objects).toEqual([]);
   });
 
+  it('gives a linked process its callers, as a service has', () => {
+    const child = index.objects.find((o) => o.kind === 'process' && o.name === 'DemoChildProcess')!;
+    expect(child.calledBy!.map((c) => `${c.via}: ${c.ownerName} / ${c.name}`)).toEqual([
+      'process: Demo_MainProcess / DemoChildProcess',
+      'process: Demo_MainProcess / DemoChildProcess 1',
+    ]);
+    expect(child.levelId).toMatch(/^25\./);
+    // A BPD nothing calls has none.
+    expect(index.objects.find((o) => o.kind === 'process' && o.name === 'Demo_MainProcess')!.calledBy).toBeUndefined();
+  });
+
   it('finds a service no process calls', () => {
     const r = shownAs('Demo_MainProcess', 'Orphan');
     expect(objectsOf(r)).toEqual(['Service flow: Demo_OrphanWeather']);

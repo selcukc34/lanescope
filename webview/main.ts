@@ -303,6 +303,8 @@ function createViewer(): NavigatedViewer {
     if (el && e.element?.labelTarget) v.get<Selection>('selection').select(el);
     // Clicking the pool or empty canvas shows the process details.
     panel.select(el && el.type !== 'bpmn:Participant' && el.type !== 'bpmn:Process' ? el.id : undefined);
+    // Something else is selected than the search row went to: its mark goes, the list stays where it is.
+    panel.clearSearchActive();
   });
   // The one way the selection is drawn: every select (a click, a Changes or Trace row, the
   // selection kept over a re-render or brought back after a drill-down) goes through here.
@@ -387,8 +389,12 @@ async function render(msg: RenderMessage): Promise<void> {
     if (msg.showChanges === true) panel.showTab('changes');
     // A description was just picked: show its check.
     if (msg.showTrace === true) panel.showTab('trace');
-    // The search runs again on what is drawn now (a reload, a toggle, another level).
-    runSearch(false);
+    // The search runs again only when what it looks at changed (another read of the file, showScripts), or, with
+    // "Shown process", when another process or service is shown: navigation leaves the list as it is.
+    const shown = shownKey(msg);
+    if (msg.searchVersion !== searchVersion || (panel.searchScope === 'shown' && shown !== searchShown)) runSearch(false);
+    searchVersion = msg.searchVersion;
+    searchShown = shown;
     // The level a trace or search row opened: select its element (only for this render).
     const reveal = pendingReveal;
     pendingReveal = undefined;
@@ -532,10 +538,13 @@ function goTo(where: ShowLevelMessage, id: string | undefined, fromSearch: boole
 }
 
 /**
- * A row of the Search tab was clicked: go where the match is. In a process
- * of the file: that process (picked), the sub-process level around the
- * element, the element. In a service: its diagram where the index says it
- * is drawn (below the first activity of a process that calls it, else on
+ * A row of the Search tab was clicked: go where the match is.
+ *
+ * In a service or a linked process that the shown process (or the service
+ * shown on its own) calls directly, from wherever in it: drill down from the
+ * shown diagram, through the calling activity, without changing the picker.
+ * Otherwise: a process is picked and drawn; a service is drawn where the
+ * index says (below the first activity of a process that calls it, else on
  * its own); a service without a diagram selects its caller. A business
  * object: the Data tab.
  */
@@ -545,25 +554,53 @@ function revealSearchResult(object: SearchObject, target: SearchTarget, dataFiel
     panel.showType(target.name, dataField);
     return;
   }
+  const id = target.type === 'root' ? undefined : target.id;
+  const levels = target.type === 'root' ? [] : target.levels;
+  const context = callerInShown(object);
+  if (context && object.levelId !== undefined && object.level) {
+    goTo(callerLevel(context, [object.levelId, ...levels]), id, true);
+    return;
+  }
   const level = object.level;
   if (!level) {
     const caller = object.calledBy?.[0];
     if (caller) showCaller(caller);
     return;
   }
-  const levels = target.type === 'root' ? [] : target.levels;
-  goTo(showLevel(level, levels), target.type === 'root' ? undefined : target.id, true);
+  goTo(showLevel(level, levels), id, true);
 }
 
-/** "Show caller": the activity of a process, or the step of a service, that calls a service. */
+/** The first activity of the shown process (or service shown on its own) that calls `object`. */
+function callerInShown(object: SearchObject): SearchCaller | undefined {
+  if (!current) return undefined;
+  const root = current.serviceRoot ? { via: 'service', id: current.path[0].id } : { via: 'process', id: current.rootProcessId };
+  return object.calledBy?.find((c) => c.via === root.via && c.ownerId === root.id);
+}
+
+/** The level a caller is drawn at when its owner is the root, with `more` levels below it. */
+function callerLevel(c: SearchCaller, more: string[] = []): ShowLevelMessage {
+  const below = [...c.levels, ...more];
+  return c.via === 'service' ? { type: 'showLevel', serviceId: c.ownerId, below } : { type: 'showLevel', processId: c.ownerId, below };
+}
+
+/** "Show caller" and a Callers row: the activity or step that calls an object, where it is drawn. */
 function showCaller(caller: SearchCaller): void {
-  goTo(showLevel(caller.level), caller.nodeId, true);
+  // A caller in the shown root: that root, not where the index would draw its owner.
+  const inRoot = current !== undefined && (current.serviceRoot
+    ? caller.via === 'service' && caller.ownerId === current.path[0].id
+    : caller.via === 'process' && caller.ownerId === current.rootProcessId);
+  goTo(inRoot ? callerLevel(caller) : showLevel(caller.level), caller.nodeId, true);
 }
 
 /** The showLevel message of a level, with `more` levels below it. */
 function showLevel(level: SearchLevel, more: string[] = []): ShowLevelMessage {
   const below = [...level.below, ...more];
   return level.serviceId !== undefined ? { type: 'showLevel', serviceId: level.serviceId, below } : { type: 'showLevel', processId: level.processId!, below };
+}
+
+/** What is shown as the root: the chosen process, or a service on its own. */
+function shownKey(msg: RenderMessage): string {
+  return msg.serviceRoot ? `service:${msg.path[0].id}` : `process:${msg.rootProcessId}`;
 }
 
 // ---- Search -------------------------------------------------------------
@@ -573,6 +610,9 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let searchRequest = 0;
 /** The latest search was typed: its answer brings the Search tab to the front. */
 let searchWasTyped = false;
+/** The index version and the shown root the list was last searched for. */
+let searchVersion: number | undefined;
+let searchShown: string | undefined;
 
 /**
  * Sends the text in the search box to the host, which searches the open

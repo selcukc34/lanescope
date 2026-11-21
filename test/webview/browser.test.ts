@@ -20,6 +20,8 @@ import type { ProcessPackage } from '../../src/model/model';
 import type { HostMessage, RenderMessage } from '../../src/views/protocol';
 import { ViewerSession } from '../../src/views/viewerSession';
 import { buildCsp } from '../../src/views/webviewHtml';
+import { readTwxPackage } from '../../src/twx/twxImport';
+import { hasLocalTwx, localTwx } from '../localFixtures';
 import { NOTIFY_TASK_ID, V1_ZIP, V2_ZIP } from '../bobV2';
 import { DISCOUNT_SERVICE_ID, PRICE_SERVICE_ID, syntheticTwxPackage } from '../syntheticTwx';
 
@@ -871,12 +873,12 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       const out = await page.eval<Placement>(placement(target));
       expect(Math.min(out.left, out.top, out.right, out.bottom)).toBeLessThan(0);
       await typeSearch('Exception Handled');
-      await clickResult('.search-head', 'End event');
+      await clickResult('.search-head', 'Exception Handled');
       expect(scaleOf(await page.eval<string>(viewport))).toBeCloseTo(scaleOf(zoomed), 2);
       expectMinimal(await page.eval<Placement>(placement(target)));
       // Revealed again: in view now, nothing moves.
       const once = await page.eval<string>(viewport);
-      await clickResult('.search-head', 'End event');
+      await clickResult('.search-head', 'Exception Handled');
       expect(await page.eval<string>(viewport)).toBe(once);
 
       // Changes.
@@ -944,7 +946,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(ui.active).toBe(ui.tab);
       expect(ui.summary).toBe(`${ui.rows.length} matches in 1 object`);
       expect(ui.objects).toEqual([['Process: Order Delivery Process', true]]);
-      expect(ui.groups.slice(0, 2)).toEqual(['TaskValidate Order SF', 'Sequence flowTo Validate Order SF']);
+      expect(ui.groups.slice(0, 2)).toEqual(['Validate Order SF', 'To Validate Order SF']);
       expect(ui.rows[0]).toBe('NameValidate Order SF');
       expect(ui.marks.every((m) => m.toLowerCase() === 'validate')).toBe(true);
       expect(ui.state).toMatchObject({ search: 'Validate', tab: 'search' });
@@ -971,7 +973,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(await page.eval<string>(details)).toBe('Valid');
       expect(await page.eval<string>(`document.querySelector('.tab.active').textContent`)).toMatch(/^Search \(/);
       expect(await page.eval<string>(viewport)).toBe(before);
-      await clickResult('.search-head', 'Exclusive gatewayRoute Order');
+      await clickResult('.search-head', 'Route Order');
       expect(await page.eval<string[]>(selected)).toEqual([ROUTE_GATEWAY_ID]);
       expect(await page.eval<string>(viewport)).toBe(before);
       // A field of the business object: the Data tab, on that field.
@@ -1000,7 +1002,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await openHosted(async () => v1Package);
       await typeSearch('Validate');
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
-      expect(await page.eval<string>(focused)).toBe('TaskValidate Order SF');
+      expect(await page.eval<string>(focused)).toBe('Validate Order SF');
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
       expect(await page.eval<string>(focused)).toBe('NameValidate Order SF');
       await page.pressKey('ArrowDown', 'ArrowDown', 40);
@@ -1037,7 +1039,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
         bold: document.querySelectorAll('.panel b').length,
         xss: window.__xss,
       })`);
-      expect(ui.heads[0]).toBe('Task<img src=x onerror="window.__xss=1">Pick <b>Items</b> › Prepare');
+      expect(ui.heads[0]).toBe('Prepare › <img src=x onerror="window.__xss=1">Pick <b>Items</b>');
       expect(ui.rows[0]).toBe('Name<img src=x onerror="window.__xss=1">Pick <b>Items</b>');
       expect(ui).toMatchObject({ imgs: 0, bold: 0 });
       expect(ui.xss).toBeUndefined();
@@ -1064,7 +1066,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
 
       await typeSearch('Compute Total');
       expect((await page.eval<SearchUi>(searchUi)).objects).toEqual([['Service flow: Price Order', true]]);
-      expect(await page.eval<string>(`document.querySelector('.search-called-by').textContent`)).toBe(' · called by Review Order');
+      expect(await page.eval<string>(`document.querySelector('.search-called-by').textContent`)).toBe('called by Synthetic Order');
       await clickResult('.search-row', 'NameCompute Total');
       expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: top.rootProcessId, below: [PRICE_SERVICE_ID] }]);
       await pump();
@@ -1072,14 +1074,15 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(level).toMatchObject({ details: 'Compute Total', crumbs: ['Synthetic Order', 'Price Order'], tab: expect.stringMatching(/^Search \(/) });
       expect(level.selected).toHaveLength(1);
 
-      // "Show caller": back on the process, the calling activity selected.
-      await page.clickButton('Show caller');
+      // The Callers list: back on the process, the calling activity selected.
+      await page.clickButton('Callers (1)');
+      await page.clickButton('Review Order in Process: Synthetic Order');
       await pump();
       expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [reviewId], details: 'Review Order', crumbs: [] });
 
       // The service's own group: its diagram with nothing selected, its summary in Details.
       await typeSearch('Price Order');
-      await clickResult('.search-head', 'Service flowPrice Order');
+      await clickResult('.search-head', 'Price Order');
       await pump();
       expect(await page.eval<Ui>(ui)).toMatchObject({ selected: [], details: 'Price Order', crumbs: ['Synthetic Order', 'Price Order'] });
       // The breadcrumb leads back.
@@ -1112,16 +1115,16 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
         selected: document.querySelectorAll('.djs-element.selected').length,
         first: document.querySelector('.search-object-name').textContent,
       })`);
-      // The search runs again with the other process shown: it comes first now.
-      expect(after).toEqual({ picker: 'Second Order', details: 'Approved twice?', selected: 1, first: 'Process: Second Order' });
+      // Navigation leaves the list as it is: the process shown when it was searched stays first.
+      expect(after).toEqual({ picker: 'Second Order', details: 'Approved twice?', selected: 1, first: 'Process: Synthetic Order' });
     });
 
     it('opens a service no process calls as a root level of its own, with the file in the breadcrumb', async () => {
       const top = await openHosted(() => syntheticTwxPackage(), { fileName: 'synthetic.twx' });
       await typeSearch('Apply Discount');
       // Called by a step of a service only.
-      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Apply Discount')).querySelector('.search-called-by').textContent`)).toBe(' · called by Service: Price Order');
-      await clickResult('.search-head', 'Service flowApply Discount');
+      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Apply Discount')).querySelector('.search-called-by').textContent`)).toBe('called by Service: Price Order');
+      await clickResult('.search-head', 'Apply Discount');
       expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', serviceId: DISCOUNT_SERVICE_ID, below: [] }]);
       await pump();
       expect(await page.eval<{ crumbs: string[]; details: string; back: boolean }>(`({ crumbs: ${crumbsText}, details: ${details}, back: !document.querySelector('.crumbs button').hidden })`)).toEqual({
@@ -1135,8 +1138,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       expect(await page.eval<string[]>(crumbsText)).toEqual([]);
       expect(await page.eval<string>(`document.querySelector('.toolbar .title').textContent`)).toBe('Synthetic Order');
 
-      // "Show caller" on it: the calling service, where it is drawn (below Review Order), on the calling step.
-      await page.eval(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Apply Discount')).querySelector('.search-caller').click()`);
+      // Its caller: the calling service, where it is drawn (below Review Order), on the calling step.
+      await page.eval(`(() => { const d = [...document.querySelectorAll('.search-object')].find((x) => x.textContent.includes('Service flow: Apply Discount')); d.querySelector('.search-callers-toggle').click(); d.querySelector('.search-caller-row').click(); })()`);
       expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: top.rootProcessId, below: [PRICE_SERVICE_ID] }]);
       await pump();
       expect(await page.eval<{ crumbs: string[]; details: string; selected: number }>(`({ crumbs: ${crumbsText}, details: ${details}, selected: document.querySelectorAll('.djs-element.selected').length })`)).toEqual({
@@ -1151,8 +1154,8 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       delete pkg.processes[0].nodes.find((n) => n.name === 'Review Order')!.calledElement;
       await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
       await typeSearch('Price Order');
-      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelector('.search-called-by').textContent`)).toBe(' · not called');
-      expect(await page.eval<number>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelectorAll('.search-caller').length`)).toBe(0);
+      expect(await page.eval<string>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelector('.search-called-by').textContent`)).toBe('not called');
+      expect(await page.eval<number>(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelectorAll('.search-callers-box').length`)).toBe(0);
     });
 
     it('filters to the shown process, and remembers the choice', async () => {
@@ -1177,7 +1180,7 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
 
     it('folds objects: all open up to 10, the rest folded; a fold is kept on a re-render; folded rows are skipped by the keys', async () => {
       const pkg = await syntheticTwxPackage();
-      for (let i = 1; i <= 11; i++) pkg.processes.push({ ...pkg.processes[0], id: `copy-${i}`, name: `Copy ${String(i).padStart(2, '0')}` });
+      for (let i = 1; i <= 11; i++) pkg.processes.push({ ...pkg.processes[0], id: `copy-${i}`, originalId: `25.copy-${i}`, name: `Copy ${String(i).padStart(2, '0')}` });
       await openHosted(async () => pkg, { fileName: 'synthetic.twx' });
       await typeSearch('Review Order');
       const objects = (await page.eval<SearchUi>(searchUi)).objects.filter(([name]) => name.startsWith('Process: '));
@@ -1208,6 +1211,227 @@ describe.skipIf(!CHROME)('webview in a real browser', () => {
       await page.eval(`(async () => { window.postMessage(${JSON.stringify({ ...first, preserveView: true })}, '*'); await new Promise((r) => setTimeout(r, 300)); })()`);
       await pump();
       expect((await page.eval<SearchUi>(searchUi)).rows).toEqual(ui.rows);
+    });
+  });
+  describe('search list', () => {
+    const scroller = `document.querySelector('.tab-bodies')`;
+    const scrollTop = `${scroller}.scrollTop`;
+    const activeText = `document.querySelector('.search-nav.active')?.textContent ?? null`;
+
+    /** The synthetic export with `copies` more processes (each its own BPD) and `extraCallers` more activities calling Price Order. */
+    async function bigPackage(copies: number, extraCallers = 0): Promise<ProcessPackage> {
+      const pkg = await syntheticTwxPackage();
+      const bpd = pkg.processes[0];
+      const review = bpd.nodes.find((n) => n.name === 'Review Order')!;
+      for (let i = 2; i < 2 + extraCallers; i++) bpd.nodes.push({ ...review, id: `node_review_${i}`, name: `Review Again ${i}` });
+      // The copies call nothing: Price Order keeps its callers in the first process only.
+      const plain = bpd.nodes.map((n) => {
+        const copy = { ...n };
+        delete copy.calledElement;
+        return copy;
+      });
+      for (let i = 1; i <= copies; i++) pkg.processes.push({ ...bpd, nodes: plain, id: `copy-${i}`, originalId: `25.copy-${i}`, name: `Copy ${String(i).padStart(2, '0')}` });
+      return pkg;
+    }
+
+    it('keeps the scroll position and marks the row gone to, also when the process changes or a service opens', async () => {
+      await openHosted(async () => bigPackage(20), { fileName: 'synthetic.twx' });
+      await typeSearch('Order');
+      expect(await page.eval<number>(`${scroller}.scrollHeight - ${scroller}.clientHeight`)).toBeGreaterThan(1000);
+
+      // A row in the middle of the list, of another process.
+      await page.eval(`${scroller}.scrollTop = ${scroller}.scrollHeight / 2`);
+      const before = await page.eval<number>(scrollTop);
+      const row = await page.eval<string>(`(() => {
+        const box = ${scroller}.getBoundingClientRect();
+        const r = [...document.querySelectorAll('.search-object:not(.shown) .search-row')].find((b) => { const x = b.getBoundingClientRect(); return x.top > box.top + 60 && x.bottom < box.bottom - 20; });
+        r.click();
+        return r.closest('.search-object').querySelector('.search-object-name').textContent + ' | ' + r.textContent;
+      })()`);
+      expect(await postedOf('showLevel')).toHaveLength(1);
+      await pump();
+      expect(await page.eval<string>(`document.querySelector('.process-select').selectedOptions[0].textContent`)).toBe(row.split(' | ')[0].replace('Process: ', ''));
+      expect(Math.abs((await page.eval<number>(scrollTop)) - before)).toBeLessThanOrEqual(2);
+      expect(await page.eval<string | null>(activeText)).toBe(row.split(' | ')[1]);
+      expect(await page.eval<string | null>(`document.querySelector('.search-nav.active').getAttribute('aria-current')`)).toBe('true');
+
+      // The end of the list: a service opens.
+      await page.eval(`${scroller}.scrollTop = ${scroller}.scrollHeight`);
+      const atEnd = await page.eval<number>(scrollTop);
+      // Past the first 10 objects it starts folded: open it as the user does, then go.
+      await page.eval(`(() => { const d = [...document.querySelectorAll('.search-object')].find((x) => x.textContent.includes('Service flow: Price Order')); d.open = true; ${scroller}.scrollTop = ${scroller}.scrollHeight; })()`);
+      const opened = await page.eval<number>(scrollTop);
+      await page.eval(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order')).querySelector('.search-head').click()`);
+      await pump();
+      expect(Math.abs((await page.eval<number>(scrollTop)) - opened)).toBeLessThanOrEqual(2);
+      expect(await page.eval<string[]>(crumbsText)).toEqual([expect.any(String), 'Price Order']);
+      expect(atEnd).toBeGreaterThan(0);
+      expect(await page.eval<string | null>(activeText)).toBe('Price Order');
+      // The breadcrumb back: the list stays.
+      await page.eval(`document.querySelector('.crumbs li button').click()`);
+      await pump();
+      expect(Math.abs((await page.eval<number>(scrollTop)) - opened)).toBeLessThanOrEqual(2);
+      // Arrow down from the box goes on from the row gone to.
+      await page.eval(`document.querySelector('.search-input').focus()`);
+      await page.pressKey('ArrowDown', 'ArrowDown', 40);
+      expect(await page.eval<string>(`document.activeElement.textContent`)).toBe('Price Order');
+    }, 60_000);
+
+    it('Callers: the list stays open while going from caller to caller; folds and open lists survive navigation and a live refresh', async () => {
+      await openHosted(async () => bigPackage(2, 4), { fileName: 'synthetic.twx' });
+      await typeSearch('Order');
+      const price = `[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Service flow: Price Order'))`;
+      type State = { open: string | null; listHidden: boolean; active: string | null; copyFolded: boolean };
+      const state = `({
+        open: ${price}.querySelector('.search-callers-toggle').getAttribute('aria-expanded'),
+        listHidden: ${price}.querySelector('.search-callers').hidden,
+        active: ${activeText},
+        copyFolded: ![...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Process: Copy 01')).open,
+      })`;
+      expect(await page.eval<string>(`${price}.querySelector('.search-callers-toggle').textContent`)).toBe('▸ Callers (5)');
+      // Fold a process, open the callers.
+      await page.eval(`[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Process: Copy 01')).querySelector('summary').click()`);
+      await page.eval(`${price}.querySelector('.search-callers-toggle').click()`);
+      const rows = await page.eval<string[]>(`[...${price}.querySelectorAll('.search-caller-row')].map((b) => b.textContent)`);
+      expect(rows).toEqual([
+        'Review Order in Process: Synthetic Order',
+        'Review Again 2 in Process: Synthetic Order',
+        'Review Again 3 in Process: Synthetic Order',
+        'Review Again 4 in Process: Synthetic Order',
+        'Review Again 5 in Process: Synthetic Order',
+      ]);
+      // From the service's diagram, so that each caller is a navigation.
+      await page.eval(`${price}.querySelector('.search-head').click()`);
+      await pump();
+      for (const i of [1, 2]) {
+        await page.eval(`${price}.querySelectorAll('.search-caller-row')[${i}].click()`);
+        await pump();
+        expect(await page.eval<State>(state)).toEqual({ open: 'true', listHidden: false, active: rows[i], copyFolded: true });
+        expect(await page.eval<string>(details)).toBe(rows[i].split(' in ')[0]);
+      }
+
+      // A live refresh searches again: the row gone to, the fold and the open list stay, and so does the position.
+      const before = await page.eval<number>(scrollTop);
+      host!.s.fileChanged();
+      await new Promise((r) => setTimeout(r, 400));
+      await host!.s.idle;
+      await pump();
+      expect(await page.eval<State>(state)).toEqual({ open: 'true', listHidden: false, active: rows[2], copyFolded: true });
+      expect(Math.abs((await page.eval<number>(scrollTop)) - before)).toBeLessThanOrEqual(2);
+
+      // Something else selected on the canvas: the mark goes, the list does not move.
+      const at = await page.eval<number>(scrollTop);
+      await page.clickSelector(`[data-element-id="node_gateway"] .djs-hit`);
+      expect(await page.eval<string | null>(activeText)).toBeNull();
+      expect(await page.eval<number>(scrollTop)).toBe(at);
+
+      // A new query: a new list.
+      await typeSearch('Approved');
+      expect(await page.eval<string[]>(`[...document.querySelectorAll('.search-row')].map((r) => r.textContent)`)).toEqual(
+        expect.arrayContaining(['NameApproved?']),
+      );
+      expect(await page.eval<number>(`document.querySelectorAll('.search-caller-row').length`)).toBe(0);
+    }, 60_000);
+
+    it('reads well in every theme: sticky object heads, kind borders from the theme, pills and the active row', async () => {
+      type Look = { sticky: string; process: string; data: string; pill: string; pillText: string; mark: string; active: string };
+      const look = `(() => {
+        const css = (sel, prop) => getComputedStyle(document.querySelector(sel))[prop];
+        return {
+          sticky: css('.search-object > summary', 'position'),
+          process: css('.search-object.search-process', 'borderLeftColor'),
+          data: css('.search-object.search-dataType', 'borderLeftColor'),
+          pill: css('.search-row:not(.active) .search-pill', 'backgroundColor'),
+          pillText: css('.search-row:not(.active) .search-pill', 'color'),
+          mark: css('.search-snippet mark', 'backgroundColor'),
+          active: css('.search-nav.active', 'backgroundColor'),
+        };
+      })()`;
+      const themes: Array<{ name: string; vars: Record<string, string>; expected: Partial<Look> }> = [
+        {
+          name: 'vscode-dark',
+          vars: { '--vscode-charts-blue': '#3794ff', '--vscode-charts-green': '#89d185', '--vscode-badge-background': '#616161', '--vscode-badge-foreground': '#ffffff', '--vscode-editor-findMatchHighlightBackground': '#623315', '--vscode-list-activeSelectionBackground': '#04395e' },
+          expected: { process: 'rgb(55, 148, 255)', data: 'rgb(137, 209, 133)', pill: 'rgb(97, 97, 97)', pillText: 'rgb(255, 255, 255)', mark: 'rgb(98, 51, 21)', active: 'rgb(4, 57, 94)' },
+        },
+        {
+          name: 'vscode-light',
+          vars: { '--vscode-charts-blue': '#1a85ff', '--vscode-charts-green': '#388a34', '--vscode-badge-background': '#c4c4c4', '--vscode-badge-foreground': '#333333', '--vscode-editor-findMatchHighlightBackground': '#ea5c0055', '--vscode-list-activeSelectionBackground': '#0060c0' },
+          expected: { process: 'rgb(26, 133, 255)', data: 'rgb(56, 138, 52)', pill: 'rgb(196, 196, 196)', pillText: 'rgb(51, 51, 51)', active: 'rgb(0, 96, 192)' },
+        },
+        {
+          name: 'vscode-high-contrast',
+          vars: { '--vscode-contrastBorder': '#6fc3df', '--vscode-badge-background': '#000000', '--vscode-badge-foreground': '#ffffff', '--vscode-editor-findMatchHighlightBackground': '#000000', '--vscode-list-activeSelectionBackground': '#000000' },
+          expected: { process: 'rgb(111, 195, 223)', data: 'rgb(111, 195, 223)', pill: 'rgb(0, 0, 0)', pillText: 'rgb(255, 255, 255)' },
+        },
+      ];
+      for (const theme of themes) {
+        await openHosted(async () => v1Package);
+        await page.eval(`(async () => { ${Object.entries(theme.vars).map(([k, v]) => `document.body.style.setProperty('${k}', '${v}');`).join(' ')} document.body.className = '${theme.name}'; await new Promise((r) => setTimeout(r, 50)); })()`);
+        await pump();
+        await typeSearch('order');
+        await page.eval(`document.querySelector('.search-row').click()`);
+        const got = await page.eval<Look>(look);
+        expect(got.sticky, theme.name).toBe('sticky');
+        expect(got, theme.name).toMatchObject(theme.expected);
+        const shots = process.env.LANESCOPE_SCREENSHOT_DIR;
+        if (shots) {
+          const shot = (await page.send('Page.captureScreenshot', { format: 'png' })) as { result?: { data?: string } };
+          writeFileSync(path.join(shots, `search-${theme.name}.png`), Buffer.from(shot.result!.data!, 'base64'));
+        }
+      }
+    }, 60_000);
+
+    describe.skipIf(!hasLocalTwx('services'))('in the calling context (services.twx)', () => {
+      let pkg: ProcessPackage;
+      const idOf = (name: string) => pkg.processes.find((p) => p.name === name)!.id;
+      /** Picks a process in the toolbar, as the user does. */
+      const pick = async (name: string) => {
+        await page.eval(`(() => { const s = document.querySelector('.process-select'); s.value = ${JSON.stringify(idOf(name))}; s.dispatchEvent(new Event('change')); })()`);
+        await pump();
+      };
+      const picker = `document.querySelector('.process-select').selectedOptions[0].textContent`;
+
+      beforeAll(async () => {
+        pkg = await readTwxPackage(localTwx('services'));
+      });
+
+      it('opens a hit in a linked process the shown process calls from the shown process; else in its own BPD', async () => {
+        await openHosted(async () => pkg, { fileName: 'services.twx' });
+        await pick('Demo_MainProcess');
+        await typeSearch('Decide');
+        const child = `[...document.querySelectorAll('.search-object')].find((d) => d.textContent.includes('Process: DemoChildProcess'))`;
+        expect(await page.eval<string>(`${child}.querySelector('.search-called-by').textContent`)).toBe('called by Demo_MainProcess');
+        expect(await page.eval<string>(`${child}.querySelector('.search-callers-toggle').textContent`)).toBe('▸ Callers (2)');
+        await clickResult('.search-row', 'NameDecide');
+        expect(await postedOf('showLevel')).toEqual([{ type: 'showLevel', processId: idOf('Demo_MainProcess'), below: [pkg.processes.find((p) => p.name === 'DemoChildProcess')!.originalId] }]);
+        await pump();
+        expect(await page.eval<{ crumbs: string[]; picker: string; details: string; selected: number }>(`({ crumbs: ${crumbsText}, picker: ${picker}, details: ${details}, selected: document.querySelectorAll('.djs-element.selected').length })`)).toEqual({
+          crumbs: ['Demo_MainProcess', 'DemoChildProcess'],
+          picker: 'Demo_MainProcess',
+          details: 'Decide',
+          selected: 1,
+        });
+
+        // DemoChildProcess shown: the hit is on its own level.
+        await pick('DemoChildProcess');
+        await clickResult('.search-row', 'NameDecide');
+        await pump();
+        expect(await page.eval<{ crumbs: string[]; picker: string; details: string }>(`({ crumbs: ${crumbsText}, picker: ${picker}, details: ${details} })`)).toEqual({ crumbs: [], picker: 'DemoChildProcess', details: 'Decide' });
+      }, 60_000);
+
+      it('opens a service the shown process calls from the shown process, not from its first caller', async () => {
+        await openHosted(async () => pkg, { fileName: 'services.twx' });
+        await pick('MyFirstProcess');
+        await typeSearch('Service flow1');
+        // Its first caller is in JsSampleProcess.
+        await page.eval(`[...document.querySelectorAll('.search-object')].find((d) => d.querySelector('.search-object-name').textContent === 'Service flow: Service flow1').querySelector('.search-head').click()`);
+        const posted = await postedOf('showLevel');
+        expect(posted).toHaveLength(1);
+        expect(posted[0]).toMatchObject({ processId: idOf('MyFirstProcess') });
+        await pump();
+        expect(await page.eval<string[]>(crumbsText)).toEqual(['MyFirstProcess', 'Service flow1']);
+        expect(await page.eval<string>(picker)).toBe('MyFirstProcess');
+      }, 60_000);
     });
   });
 });
