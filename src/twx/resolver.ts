@@ -187,6 +187,11 @@ export class TwxResolver {
     return out;
   }
 
+  /** Ids of every service object (1.…) of the export, as they are stored. */
+  serviceIds(): string[] {
+    return [...this.objects.keys()].filter((id) => id.startsWith('1.'));
+  }
+
   /** The root element of an object file, or undefined when it is missing or unreadable. */
   object(id: string): XmlElement | undefined {
     if (!this.parsed.has(id)) {

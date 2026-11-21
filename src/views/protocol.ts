@@ -3,6 +3,7 @@
 
 import type { DiffEntry, DiffMark } from '../diff/diff';
 import type { CalleeStepKind, DataType } from '../model/model';
+import { MAX_QUERY_LENGTH, type SearchResult, type SearchScope } from '../search/search';
 import type { TraceCounts, TraceRow } from '../trace/trace';
 import { MAX_PATH_DEPTH } from './navigation';
 
@@ -314,6 +315,18 @@ export interface RenderMessage {
   trace?: TraceView;
   /** Once, on the render that follows a description picked with Check Against Description…: show the Trace tab. */
   showTrace?: true;
+  /**
+   * The first level of `path` is a service opened on its own (a search
+   * result in a service no process calls), not the chosen process; the
+   * picker still holds the chosen process.
+   */
+  serviceRoot?: true;
+  /**
+   * Changes when what the search looks at changes (another read of the file,
+   * a showScripts change); the webview searches again only then, or when
+   * the query or the scope changes, never on navigation.
+   */
+  searchVersion: number;
 }
 
 /** Host -> webview: the file could not be shown (no diagram to fall back to). */
@@ -358,7 +371,14 @@ export interface DescriptionStatusMessage {
   exists: boolean;
 }
 
-export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage | DescriptionStatusMessage;
+/** Host -> webview: the answer to a SearchMessage with the same request id. */
+export interface SearchResultMessage {
+  type: 'searchResult';
+  requestId: number;
+  result: SearchResult;
+}
+
+export type HostMessage = RenderMessage | ErrorMessage | RefreshErrorMessage | ExportSourceMessage | DescriptionStatusMessage | SearchResultMessage;
 
 /** Webview -> host: the webview script is loaded and listening. */
 export interface ReadyMessage {
@@ -386,6 +406,29 @@ export interface OpenCalleeMessage {
   type: 'openCallee';
   calleeId: string;
   path: string[];
+}
+
+/**
+ * Webview -> host: search the open file. Answered with a SearchResultMessage
+ * carrying the same requestId; the webview shows only the answer to its latest request.
+ */
+export interface SearchMessage {
+  type: 'search';
+  requestId: number;
+  query: string;
+  scope: SearchScope;
+}
+
+/**
+ * Webview -> host: draw a level from a fresh root, as a search result asks:
+ * a process of the package (`processId`, which also picks it) or a service
+ * on its own (`serviceId`), then the levels `below` it.
+ */
+export interface ShowLevelMessage {
+  type: 'showLevel';
+  processId?: string;
+  serviceId?: string;
+  below: string[];
 }
 
 /** Webview -> host: the user asked to compare the diagram with another file (Compare…). */
@@ -456,7 +499,9 @@ export type WebviewMessage =
   | ClearDescriptionMessage
   | CheckDescriptionMessage
   | NewDescriptionMessage
-  | DescriptionStatusRequestMessage;
+  | DescriptionStatusRequestMessage
+  | SearchMessage
+  | ShowLevelMessage;
 
 /** A webview message after parseWebviewMessage. */
 export type ParsedWebviewMessage = Exclude<WebviewMessage, ExportDataMessage> | ParsedExportData;
@@ -496,6 +541,33 @@ export function parseWebviewMessage(value: unknown, expected?: ExpectedExport): 
     msg.path.every(isId)
   ) {
     return { type: 'openCallee', calleeId: msg.calleeId, path: [...(msg.path as string[])] };
+  }
+  if (
+    msg.type === 'search' &&
+    onlyKeys(msg, ['type', 'requestId', 'query', 'scope']) &&
+    Number.isSafeInteger(msg.requestId) &&
+    (msg.requestId as number) >= 0 &&
+    typeof msg.query === 'string' &&
+    msg.query.length <= MAX_QUERY_LENGTH &&
+    (msg.scope === 'file' || msg.scope === 'shown')
+  ) {
+    return { type: 'search', requestId: msg.requestId as number, query: msg.query, scope: msg.scope };
+  }
+  if (
+    msg.type === 'showLevel' &&
+    onlyKeys(msg, ['type', 'processId', 'serviceId', 'below']) &&
+    (msg.processId === undefined) !== (msg.serviceId === undefined) &&
+    (msg.processId === undefined || isId(msg.processId)) &&
+    (msg.serviceId === undefined || isId(msg.serviceId)) &&
+    Array.isArray(msg.below) &&
+    msg.below.length < MAX_PATH_DEPTH &&
+    msg.below.every(isId)
+  ) {
+    return {
+      type: 'showLevel',
+      ...(msg.processId !== undefined ? { processId: msg.processId as string } : { serviceId: msg.serviceId as string }),
+      below: [...(msg.below as string[])],
+    };
   }
   if (msg.type === 'setOptions' && typeof msg.options === 'object' && msg.options !== null) {
     const o = msg.options as Record<string, unknown>;

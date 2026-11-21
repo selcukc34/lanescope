@@ -4,7 +4,7 @@
 // Only the app's own objects are opened; services of toolkits (System Data,
 // ...) are not in the export's objects and cannot be opened.
 
-import type { CalleeDiagram, CalleeDiagramSource, CalleeInternals, CalleeOpenability } from '../model/model';
+import type { CalleeDiagram, CalleeDiagramSource, CalleeInternals, CalleeOpenability, ServiceEntry } from '../model/model';
 import { localRef, type TwxResolver } from './resolver';
 import { readServiceDiagram } from './serviceReader';
 
@@ -16,6 +16,19 @@ export class TwxCalleeDiagrams implements CalleeDiagramSource {
   private readonly cache = new Map<string, Promise<CalleeDiagram | undefined>>();
 
   constructor(private readonly resolver: TwxResolver) {}
+
+  list(): ServiceEntry[] {
+    const out: ServiceEntry[] = [];
+    for (const id of this.resolver.serviceIds()) {
+      const callee = this.resolver.callee(id);
+      if (callee) out.push({ id, name: callee.name, kind: callee.kind });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  key(ref: string): string {
+    return localRef(ref);
+  }
 
   name(ref: string): string | undefined {
     return this.resolver.callee(localRef(ref))?.name;

@@ -107,3 +107,21 @@ export function subProcessDiagram(process: Process, levelId: string): Process | 
     subProcess: { levelId, eventSubProcess: sub.triggeredByEvent === true },
   };
 }
+
+/**
+ * The level ids of the sub-processes around a node of `process`, outermost
+ * first: the levels to open, below the process, to draw the node. Empty for
+ * a node at the top level.
+ */
+export function subProcessLevels(process: Process, node: FlowNode): string[] {
+  const byId = new Map(process.nodes.map((n) => [n.id, n]));
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let parent = node.parentId !== undefined ? byId.get(node.parentId) : undefined;
+  while (parent && !seen.has(parent.id)) {
+    seen.add(parent.id);
+    chain.unshift(subProcessLevelId(parent));
+    parent = parent.parentId !== undefined ? byId.get(parent.parentId) : undefined;
+  }
+  return chain;
+}

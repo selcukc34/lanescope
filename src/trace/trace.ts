@@ -10,7 +10,7 @@
 // extra. Start, end and other events are never extra.
 
 import type { DataType, Flow, FlowNode, FlowNodeKind, Process, ProcessPackage } from '../model/model';
-import { subProcessLevelId } from '../model/subProcess';
+import { subProcessLevels } from '../model/subProcess';
 import type { DescribedBusinessObject, DescribedHumanTask, DescriptionItem, GatewayPathGroup, ProcessDescription } from './description';
 
 export type TraceRowKind = 'step' | 'gateway-path' | 'bo-field' | 'task-field' | 'extra-node';
@@ -140,20 +140,6 @@ const isGateway = (n: FlowNode) => GATEWAY_KINDS.has(n.kind);
 function candidateRank(n: FlowNode): number {
   const kind = isActivity(n) ? 0 : isGateway(n) ? 1 : 2;
   return kind * 2 + (n.parentId === undefined ? 0 : 1);
-}
-
-/** The level ids of the sub-processes around a node, outermost first. */
-function subProcessLevels(process: Process, node: FlowNode): string[] {
-  const byId = new Map(process.nodes.map((n) => [n.id, n]));
-  const chain: string[] = [];
-  const seen = new Set<string>();
-  let parent = node.parentId !== undefined ? byId.get(node.parentId) : undefined;
-  while (parent && !seen.has(parent.id)) {
-    seen.add(parent.id);
-    chain.unshift(subProcessLevelId(parent));
-    parent = parent.parentId !== undefined ? byId.get(parent.parentId) : undefined;
-  }
-  return chain;
 }
 
 function nodeTarget(process: Process, node: FlowNode): TraceTarget {

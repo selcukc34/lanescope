@@ -51,6 +51,19 @@ export interface CalleeDiagramSource {
   openability(id: string): CalleeOpenability;
   /** The diagram of a service flow or client-side human service; undefined when it cannot be opened. */
   read(id: string): Promise<CalleeDiagram | undefined>;
+  /** Every service of the export (called or not), by name. Toolkit services are not in the export's objects. */
+  list(): ServiceEntry[];
+  /** The service id a reference stands for (a calledElement id), as list() and read() take it. */
+  key(ref: string): string;
+}
+
+/** A service of an export, as CalleeDiagramSource.list() gives it. */
+export interface ServiceEntry {
+  /** Object id, e.g. "1.bebd697e-…". */
+  id: string;
+  name: string;
+  /** Readable kind, e.g. "Service flow", "Client-side human service", "External service". */
+  kind: string;
 }
 
 export interface CalleeDiagram {

@@ -221,6 +221,7 @@ export async function buildRenderMessage(
     dataTypes: pkg.dataTypes,
     warnings: [...new Set(warnings)],
     loadedAt,
+    searchVersion: 0,
   };
 }
 
