@@ -4,15 +4,16 @@
 // as the viewer draws it when the service is opened), and every business
 // object. Who calls whom comes from src/model/callGraph; from it the index
 // works out where each object is drawn and who calls each service and
-// linked process: activities of processes and steps of services. It reads nothing new itself: processes come with the package, the
-// service diagrams from the package's CalleeDiagramSource (cached there).
+// linked process: activities of processes and steps of services. It reads
+// nothing new itself: processes come with the package, the service diagrams
+// from the package's CalleeDiagramSource (cached there).
 // Packed toolkits are not read. Pure: no vscode.
 //
 // With showScripts off, script text is not put in the index at all; the
 // index only counts what it left out.
 
 import { KIND_LABELS } from '../model/labels';
-import { buildCallGraph, readServiceDiagrams, type CallNodeRef } from '../model/callGraph';
+import { buildCallGraph, readServiceDiagrams, refKey, type CallNodeRef } from '../model/callGraph';
 import type { CalledElement, CoachSummary, DataMapping, DataParameter, FlowNode, Process, ProcessPackage, ProcessVariable } from '../model/model';
 import { subProcessLevels } from '../model/subProcess';
 import type { SearchCaller, SearchField, SearchGroup, SearchIndex, SearchLevel, SearchObject, SearchTarget } from './search';
@@ -80,8 +81,8 @@ export async function buildSearchIndex(pkg: ProcessPackage, options: SearchIndex
         level: { ...owner, below: [...owner.below, ...site.levels] },
       };
     });
-  /** The services a diagram calls directly, which the "Shown process" scope takes in. */
-  const callsOf = (ref: CallNodeRef) => [...new Set(graph.callees(ref).filter((s) => s.to.kind === 'service').map((s) => s.to.id))];
+  /** The services and linked processes a diagram calls directly ("service:<id>", "process:<id>"), which the "Shown process" scope takes in. */
+  const callsOf = (ref: CallNodeRef) => [...new Set(graph.callees(ref).map((s) => refKey(s.to)))].filter((k) => k !== refKey(ref));
 
   for (const process of pkg.processes) {
     const ref: CallNodeRef = { kind: 'process', id: process.id };

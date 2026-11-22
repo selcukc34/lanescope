@@ -189,7 +189,7 @@ describe('search on the synthetic TWX export', () => {
     const price = index.objects[findObject(index, 'service', PRICE_SERVICE_ID)!];
     const bpd = twx.processes[0].id;
     // Drawn below the activity that calls it; it calls Apply Discount.
-    expect(price).toMatchObject({ label: 'Service flow', openable: true, level: { processId: bpd, below: [PRICE_SERVICE_ID] }, calls: [DISCOUNT_SERVICE_ID] });
+    expect(price).toMatchObject({ label: 'Service flow', openable: true, level: { processId: bpd, below: [PRICE_SERVICE_ID] }, calls: [`service:${DISCOUNT_SERVICE_ID}`] });
     expect(price.calledBy).toEqual([
       { via: 'process', ownerId: bpd, ownerName: 'Synthetic Order', nodeId: 'node_review', name: 'Review Order', levels: [], level: { processId: bpd, below: [] } },
     ]);
@@ -197,7 +197,7 @@ describe('search on the synthetic TWX export', () => {
     // A process nothing calls has no callers to list.
     expect(index.objects[0].calledBy).toBeUndefined();
     expect(index.objects[0].levelId).toBe(twx.processes[0].originalId);
-    expect(index.objects[0]).toMatchObject({ kind: 'process', level: { processId: bpd, below: [] }, calls: [PRICE_SERVICE_ID] });
+    expect(index.objects[0]).toMatchObject({ kind: 'process', level: { processId: bpd, below: [] }, calls: [`service:${PRICE_SERVICE_ID}`] });
   });
 
   it('counts a step of a service as a caller: Apply Discount is called by Price Order', () => {
@@ -279,6 +279,36 @@ describe('search on the synthetic TWX export', () => {
     // The shown object can be a service too: with the services it calls.
     const price = findObject(two, 'service', PRICE_SERVICE_ID)!;
     expect(objectsOf(search(two, 'Discount', { scope: 'shown', shownObject: price }))).toEqual(['Service flow: Price Order', 'Service flow: Apply Discount']);
+  });
+
+  it('"Shown process" takes in the linked processes the shown one calls, one level down, as it does services', async () => {
+    // Synthetic Order calls Second Order (a linked process), which calls Third Order.
+    const pkg = await syntheticTwxPackage();
+    const second = (await syntheticTwxPackage({ otherIds: true })).processes[0];
+    second.name = 'Second Order';
+    second.nodes.find((n) => n.name === 'Approved?')!.name = 'Approved twice?';
+    const third: typeof second = { ...structuredClone(second), id: 'third', originalId: '25.third', name: 'Third Order' };
+    third.nodes.find((n) => n.name === 'Approved twice?')!.name = 'Approved thrice?';
+    const call = (id: string, name: string, to: string) => ({ id, name, kind: 'callActivity' as const, originalType: 'callActivity', inputs: [], outputs: [], calledElement: { id: to } });
+    pkg.processes[0].nodes.push(call('node:linked', 'Open Second', second.originalId!));
+    second.nodes.push(call('node-b2:linked', 'Open Third', '25.third'));
+    pkg.processes.push(second, third);
+    const index = await buildSearchIndex(pkg, { showScripts: true });
+    const first = findObject(index, 'process', pkg.processes[0].id)!;
+    expect(index.objects[first].calls).toEqual([`service:${PRICE_SERVICE_ID}`, `process:${second.id}`]);
+    const shownScope = (query: string, shownObject: number) => objectsOf(search(index, query, { scope: 'shown', shownObject }));
+    // One level: Second Order is in, Third Order (two levels down) is not.
+    expect(shownScope('twice', first)).toEqual(['Process: Second Order']);
+    expect(shownScope('thrice', first)).toEqual([]);
+    expect(shownScope('Approved', first)).toEqual(['Process: Synthetic Order', 'Process: Second Order']);
+    // Services and linked processes together, the shown object first, the rest in index order.
+    expect(shownScope('Order', first)).toEqual(['Process: Synthetic Order', 'Process: Second Order', 'Service flow: Price Order']);
+    // From Second Order: Third Order and the service it calls, not its caller.
+    const fromSecond = findObject(index, 'process', second.id)!;
+    expect(shownScope('Approved', fromSecond)).toEqual(['Process: Second Order', 'Process: Third Order']);
+    expect(shownScope('Open Second', fromSecond)).toEqual([]);
+    // The whole file still has all three.
+    expect(objectsOf(search(index, 'Approved', { scope: 'file', shownObject: first }))).toEqual(['Process: Synthetic Order', 'Process: Second Order', 'Process: Third Order']);
   });
 
   it('gives a node inside a sub-process its level, and a service called from there the caller level', async () => {

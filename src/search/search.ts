@@ -21,7 +21,10 @@ export interface SearchObject {
   openable?: boolean;
   /** Where the object's diagram is drawn; undefined for a service without a diagram and a business object. */
   level?: SearchLevel;
-  /** Ids of the services the object calls directly (one level), which the "Shown process" scope takes in. */
+  /**
+   * What the object calls directly (one level), as "service:<id>" and
+   * "process:<id>" (a linked process): the "Shown process" scope takes them in.
+   */
   calls?: string[];
 }
 
@@ -151,7 +154,7 @@ export interface SearchResult {
 }
 
 export interface SearchOptions {
-  /** "shown": the shown object (a process with its sub-processes, or a service) and the services it calls. */
+  /** "shown": the shown object (a process with its sub-processes, or a service) and the services and linked processes it calls. */
   scope: SearchScope;
   /** Index into SearchIndex.objects of the object the viewer shows; none when undefined. */
   shownObject?: number;
@@ -197,7 +200,8 @@ export function findObject(index: SearchIndex, kind: SearchObject['kind'], id: s
  * The shown object comes first, the others in index order; inside an object,
  * groups with a hit in their name come first, the rest in diagram order;
  * hits keep the order of the fields. At most MAX_HITS hits are listed.
- * With scope "shown", only the shown object and the services it calls are searched.
+ * With scope "shown", only the shown object and the services and linked
+ * processes it calls directly are searched.
  */
 export function search(index: SearchIndex, rawQuery: string, options: SearchOptions = { scope: 'file' }): SearchResult {
   const query = rawQuery.trim().slice(0, MAX_QUERY_LENGTH);
@@ -220,7 +224,7 @@ export function search(index: SearchIndex, rawQuery: string, options: SearchOpti
   const inScope = (object: number) => {
     if (options.scope === 'file' || object === options.shownObject) return true;
     const o = index.objects[object];
-    return o.kind === 'service' && callees.has(o.id);
+    return o.kind !== 'dataType' && callees.has(`${o.kind}:${o.id}`);
   };
 
   const hitsByGroup = new Map<number, { hits: SearchHit[]; nameHit: boolean }>();

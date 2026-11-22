@@ -46,7 +46,10 @@ describe.skipIf(!hasLocalTwx('services'))('search of the whole of services.twx',
     expect(objectsOf(r)).toEqual(['Process: DemoChildProcess']);
     expect(r.objects[0].shown).toBe(false);
     expect(r.objects[0].groups[0].group).toMatchObject({ kind: 'Script task', name: 'Decide', target: { type: 'node', levels: [] } });
-    expect(shownAs('Demo_MainProcess', 'Decide', 'shown').objects).toEqual([]);
+    // Demo_MainProcess calls DemoChildProcess (a linked process): "Shown process" takes it in, one level.
+    expect(objectsOf(shownAs('Demo_MainProcess', 'Decide', 'shown'))).toEqual(['Process: DemoChildProcess']);
+    // DemoChildProcess calls nothing that holds the word, and not its caller.
+    expect(objectsOf(shownAs('DemoChildProcess', 'Demo_MainProcess', 'shown'))).not.toContain('Process: Demo_MainProcess');
   });
 
   it('gives a linked process its callers, as a service has', () => {
