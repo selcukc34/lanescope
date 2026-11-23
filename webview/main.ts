@@ -16,10 +16,12 @@ import type {
   HostMessage,
   RefreshErrorMessage,
   RenderMessage,
+  ShowLevelMessage,
   ViewOptions,
   WebviewMessage,
 } from '../src/views/protocol';
 import type { TraceTarget } from '../src/trace/trace';
+import type { SearchCaller, SearchLevel, SearchObject, SearchResult, SearchScope, SearchTarget } from '../src/search/search';
 import { clear, h } from './dom';
 import { addDrilldownArrows, keepImportedRoot, NO_BPMN_DRILLDOWN } from './drilldown';
 import { renderExportPng, renderExportSvg } from './exportImage';
@@ -37,6 +39,10 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 interface PersistedState {
   tab?: TabId;
+  /** The text in the search box (the state is per editor tab, so per document). */
+  search?: string;
+  /** What the search looks at: the whole file (default) or the shown process. */
+  searchScope?: SearchScope;
 }
 
 interface Viewbox {
@@ -51,6 +57,15 @@ interface DiagramElement {
   type: string;
   /** Set on an external label: the element it belongs to. */
   labelTarget?: DiagramElement;
+  /** Shapes: their bounds. */
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  /** Connections: their points. */
+  waypoints?: Array<{ x: number; y: number }>;
+  /** The external label of an event, gateway or flow, when it has one. */
+  label?: DiagramElement;
 }
 
 interface Canvas {
@@ -59,7 +74,6 @@ interface Canvas {
   resized(): void;
   addMarker(element: DiagramElement, marker: string): void;
   removeMarker(element: DiagramElement, marker: string): void;
-  scrollToElement(element: DiagramElement, padding?: number): void;
 }
 
 interface ElementRegistry {
@@ -157,6 +171,18 @@ traceButton.addEventListener('click', () => {
   else vscode.postMessage({ type: 'checkDescription' });
 });
 
+// Search: always there; Cmd/Ctrl+F focuses it, Escape clears it. Results are listed in the Search tab.
+const SEARCH_DEBOUNCE_MS = 200;
+const searchInput = h('input', {
+  type: 'search',
+  class: 'search-input',
+  placeholder: 'Search…',
+  title: 'Search names, documentation, scripts, conditions… (Cmd/Ctrl+F)',
+  'aria-label': 'Search names, documentation, scripts, conditions…',
+  spellcheck: 'false',
+});
+searchInput.value = typeof state.search === 'string' ? state.search : '';
+
 const toolbar = h(
   'div',
   { class: 'toolbar', role: 'toolbar' },
@@ -170,6 +196,7 @@ const toolbar = h(
   h('span', { class: 'group' }, zoomOutButton, zoomInButton, fitButton),
   compareButton,
   traceGroup,
+  searchInput,
   exportGroup,
 );
 
@@ -213,10 +240,19 @@ const panel = new SidePanel(
     clearComparison: () => vscode.postMessage({ type: 'clearComparison' }),
     revealTrace: (target) => revealTraceTarget(target),
     clearDescription: () => vscode.postMessage({ type: 'clearDescription' }),
+    revealSearch: (object, target, dataField) => revealSearchResult(object, target, dataField),
+    showCaller: (caller) => showCaller(caller),
+    focusSearchBox: () => searchInput.focus(),
+    searchScopeChanged: (scope) => {
+      state.searchScope = scope;
+      vscode.setState(state);
+      runSearch(false);
+    },
   },
   // A hidden webview is rebuilt when its editor tab is shown again: start on
   // the tab it had (the state is per editor tab), else on Details.
-  isTabId(state.tab) ? state.tab : 'details',
+  isTabId(state.tab) && (state.tab !== 'search' || searchInput.value.trim() !== '') ? state.tab : 'details',
+  state.searchScope === 'shown' ? 'shown' : 'file',
 );
 
 const root = document.getElementById('root')!;
@@ -233,8 +269,17 @@ let current: RenderMessage | undefined;
 let importGeneration = 0;
 /** The view and selection of each level above the shown one, by path key. */
 const levelStates = new Map<string, LevelState>();
-/** A trace row asked for an element on another level: select it once that level is drawn. */
-let pendingReveal: { id: string; path: string[] } | undefined;
+/** A trace or search row asked for an element on another level: select it once that level is drawn. */
+let pendingReveal: PendingReveal | undefined;
+
+interface PendingReveal {
+  /** Element to select; undefined selects nothing (the level's summary in Details). */
+  id: string | undefined;
+  /** The level asked for. */
+  where: ShowLevelMessage;
+  /** A search row: stay on the Search tab. */
+  fromSearch?: boolean;
+}
 
 function createViewer(): NavigatedViewer {
   const style = getComputedStyle(document.body);
@@ -258,6 +303,8 @@ function createViewer(): NavigatedViewer {
     if (el && e.element?.labelTarget) v.get<Selection>('selection').select(el);
     // Clicking the pool or empty canvas shows the process details.
     panel.select(el && el.type !== 'bpmn:Participant' && el.type !== 'bpmn:Process' ? el.id : undefined);
+    // Something else is selected than the search row went to: its mark goes, the list stays where it is.
+    panel.clearSearchActive();
   });
   // The one way the selection is drawn: every select (a click, a Changes or Trace row, the
   // selection kept over a re-render or brought back after a drill-down) goes through here.
@@ -336,14 +383,22 @@ async function render(msg: RenderMessage): Promise<void> {
     // The diagram selects the same element again (its drill-down arrow with it).
     const kept = panel.selection !== undefined ? viewer.get<ElementRegistry>('elementRegistry').get(panel.selection) : undefined;
     if (kept) viewer.get<Selection>('selection').select(kept);
+    // Back on a level (breadcrumb, Back, Escape): the selection it had is brought into view if needed.
+    if (kept && restored) revealInView(kept);
     // A file was just picked with Compare…: show what it changed (kept like any tab choice).
     if (msg.showChanges === true) panel.showTab('changes');
     // A description was just picked: show its check.
     if (msg.showTrace === true) panel.showTab('trace');
-    // The level a trace row opened: select its element (only for this render).
+    // The search runs again only when what it looks at changed (another read of the file, showScripts), or, with
+    // "Shown process", when another process or service is shown: navigation leaves the list as it is.
+    const shown = shownKey(msg);
+    if (msg.searchVersion !== searchVersion || (panel.searchScope === 'shown' && shown !== searchShown)) runSearch(false);
+    searchVersion = msg.searchVersion;
+    searchShown = shown;
+    // The level a trace or search row opened: select its element (only for this render).
     const reveal = pendingReveal;
     pendingReveal = undefined;
-    if (reveal && pathKey(reveal.path) === pathKey(path)) revealElement(reveal.id);
+    if (reveal && isShown(reveal.where)) finishReveal(reveal);
     overlay.hidden = true;
     showUpdated(msg.loadedAt);
   } catch (err) {
@@ -381,10 +436,11 @@ function markChanges(msg: RenderMessage): void {
 }
 
 /**
- * A row of the Changes tab was clicked: select the element (as a click on it
- * does), scroll it into view at the current zoom, and show its details.
+ * A row of the Changes, Trace or Search tab was clicked: select the element
+ * (as a click on it does), bring it into view if needed (revealInView) and
+ * show its details. A Search row keeps the Search tab on screen.
  */
-function revealElement(id: string): void {
+function revealElement(id: string, fromSearch = false): void {
   if (!current) return;
   const registry = viewer.get<ElementRegistry>('elementRegistry');
   // Not drawn at this level (inside a collapsed sub-process): the sub-process that holds it.
@@ -392,11 +448,257 @@ function revealElement(id: string): void {
   if (shownId === undefined) return;
   const element = registry.get(shownId)!;
   viewer.get<Selection>('selection').select(element);
-  // Scrolls only when the element is (partly) out of view; the zoom stays.
-  canvas().scrollToElement(element, 80);
   panel.select(shownId);
-  panel.showTab('details');
+  revealInView(element);
+  if (!fromSearch) panel.showTab('details');
 }
+
+/** Margin, in screen pixels, an element is given from the edge of the view when the view has to move. */
+const REVEAL_MARGIN_PX = 40;
+
+/** The box of an element and its external label, in diagram coordinates. */
+function elementBox(element: DiagramElement): { x: number; y: number; right: number; bottom: number } | undefined {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const p of element.waypoints ?? []) {
+    xs.push(p.x);
+    ys.push(p.y);
+  }
+  for (const part of [element, element.label]) {
+    if (!part || part.waypoints || part.x === undefined || part.y === undefined) continue;
+    xs.push(part.x, part.x + (part.width ?? 0));
+    ys.push(part.y, part.y + (part.height ?? 0));
+  }
+  if (xs.length === 0) return undefined;
+  return { x: Math.min(...xs), y: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+/**
+ * The one way a revealed element is brought into view (Search, Changes and
+ * Trace rows, the selection brought back to a level): when it and its label
+ * are in view, nothing moves; otherwise the view moves by as little as puts
+ * them REVEAL_MARGIN_PX inside the edge, at the same zoom, never to the
+ * middle. An element larger than the view shows its top left corner.
+ */
+function revealInView(element: DiagramElement): void {
+  const box = elementBox(element);
+  if (!box) return;
+  const c = canvas();
+  const view = c.viewbox();
+  const margin = REVEAL_MARGIN_PX / view.scale;
+  /** The new start of the view along one axis. */
+  const shift = (start: number, size: number, from: number, to: number): number => {
+    const end = start + size;
+    if (from >= start && to <= end) return start;
+    // Larger than the view: its top left corner, unless that is in view already.
+    if (to - from + 2 * margin > size) return from >= start && from <= end ? start : from - margin;
+    return from < start ? from - margin : to + margin - size;
+  };
+  const x = shift(view.x, view.width, box.x, box.right);
+  const y = shift(view.y, view.height, box.y, box.bottom);
+  if (x === view.x && y === view.y) return;
+  c.viewbox({ x, y, width: view.width, height: view.height });
+}
+
+/** Selects what a pending reveal asked for, once its level is drawn. */
+function finishReveal(reveal: PendingReveal): void {
+  if (!current) return;
+  if (reveal.id === undefined) {
+    viewer.get<Selection>('selection').select(null);
+    panel.select(undefined);
+    return;
+  }
+  revealElement(reveal.id, reveal.fromSearch === true);
+}
+
+/** Whether the drawn path is the level `where` asks for. */
+function isShown(where: ShowLevelMessage): boolean {
+  if (!current) return false;
+  const root = where.serviceId !== undefined
+    ? current.serviceRoot === true && current.path[0].id === where.serviceId
+    : current.serviceRoot !== true && current.rootProcessId === where.processId;
+  return root && pathKey(currentPath().slice(1)) === pathKey(where.below);
+}
+
+/**
+ * Selects element `id` (none when undefined) on the level `where`: right
+ * away when it is drawn, else once the host has drawn it (from wherever the
+ * view is: another process, a service, a sub-process).
+ */
+function goTo(where: ShowLevelMessage, id: string | undefined, fromSearch: boolean): void {
+  if (!current) return;
+  const reveal: PendingReveal = { id, where, fromSearch };
+  if (isShown(where)) {
+    finishReveal(reveal);
+    return;
+  }
+  pendingReveal = reveal;
+  setControlsEnabled(false);
+  vscode.postMessage(where);
+}
+
+/**
+ * A row of the Search tab was clicked: go where the match is.
+ *
+ * In a service or a linked process that the shown process (or the service
+ * shown on its own) calls directly, from wherever in it: drill down from the
+ * shown diagram, through the calling activity, without changing the picker.
+ * Otherwise: a process is picked and drawn; a service is drawn where the
+ * index says (below the first activity of a process that calls it, else on
+ * its own); a service without a diagram selects its caller. A business
+ * object: the Data tab.
+ */
+function revealSearchResult(object: SearchObject, target: SearchTarget, dataField?: string): void {
+  if (!current) return;
+  if (target.type === 'dataType') {
+    panel.showType(target.name, dataField);
+    return;
+  }
+  const id = target.type === 'root' ? undefined : target.id;
+  const levels = target.type === 'root' ? [] : target.levels;
+  const context = callerInShown(object);
+  if (context && object.levelId !== undefined && object.level) {
+    goTo(callerLevel(context, [object.levelId, ...levels]), id, true);
+    return;
+  }
+  const level = object.level;
+  if (!level) {
+    const caller = object.calledBy?.[0];
+    if (caller) showCaller(caller);
+    return;
+  }
+  goTo(showLevel(level, levels), id, true);
+}
+
+/** The first activity of the shown process (or service shown on its own) that calls `object`. */
+function callerInShown(object: SearchObject): SearchCaller | undefined {
+  if (!current) return undefined;
+  const root = current.serviceRoot ? { via: 'service', id: current.path[0].id } : { via: 'process', id: current.rootProcessId };
+  return object.calledBy?.find((c) => c.via === root.via && c.ownerId === root.id);
+}
+
+/** The level a caller is drawn at when its owner is the root, with `more` levels below it. */
+function callerLevel(c: SearchCaller, more: string[] = []): ShowLevelMessage {
+  const below = [...c.levels, ...more];
+  return c.via === 'service' ? { type: 'showLevel', serviceId: c.ownerId, below } : { type: 'showLevel', processId: c.ownerId, below };
+}
+
+/** "Show caller" and a Callers row: the activity or step that calls an object, where it is drawn. */
+function showCaller(caller: SearchCaller): void {
+  // A caller in the shown root: that root, not where the index would draw its owner.
+  const inRoot = current !== undefined && (current.serviceRoot
+    ? caller.via === 'service' && caller.ownerId === current.path[0].id
+    : caller.via === 'process' && caller.ownerId === current.rootProcessId);
+  goTo(inRoot ? callerLevel(caller) : showLevel(caller.level), caller.nodeId, true);
+}
+
+/** The showLevel message of a level, with `more` levels below it. */
+function showLevel(level: SearchLevel, more: string[] = []): ShowLevelMessage {
+  const below = [...level.below, ...more];
+  return level.serviceId !== undefined ? { type: 'showLevel', serviceId: level.serviceId, below } : { type: 'showLevel', processId: level.processId!, below };
+}
+
+/** What is shown as the root: the chosen process, or a service on its own. */
+function shownKey(msg: RenderMessage): string {
+  return msg.serviceRoot ? `service:${msg.path[0].id}` : `process:${msg.rootProcessId}`;
+}
+
+// ---- Search -------------------------------------------------------------
+
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+/** Id of the latest search sent to the host; only its answer is shown. */
+let searchRequest = 0;
+/** The latest search was typed: its answer brings the Search tab to the front. */
+let searchWasTyped = false;
+/** The index version and the shown root the list was last searched for. */
+let searchVersion: number | undefined;
+let searchShown: string | undefined;
+
+/**
+ * Sends the text in the search box to the host, which searches the open
+ * file and answers with a searchResult. `typed`: the user changed the query,
+ * which brings the Search tab to the front once there is something to search.
+ */
+function runSearch(typed: boolean): void {
+  if (!current) return;
+  const query = searchInput.value;
+  if (query.trim() === '') {
+    // A cleared box: no answer to wait for.
+    searchRequest++;
+    panel.setSearch(undefined);
+    return;
+  }
+  // One character does not start a search; it only updates one that is on.
+  if (query.trim().length < 2 && !panel.searching) return;
+  searchWasTyped = typed;
+  vscode.postMessage({ type: 'search', requestId: ++searchRequest, query: query.slice(0, 500), scope: panel.searchScope });
+}
+
+/** The host's answer to a search; an answer to an older request is dropped. */
+function showSearchResult(requestId: number, result: SearchResult): void {
+  if (requestId !== searchRequest || !current || searchInput.value.trim() === '') return;
+  panel.setSearch(result);
+  if (searchWasTyped && !result.tooShort && panel.activeTab !== 'search') panel.showTab('search');
+}
+
+function searchTyped(): void {
+  state.search = searchInput.value;
+  vscode.setState(state);
+  if (searchTimer !== undefined) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = undefined;
+    runSearch(true);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function clearSearch(): void {
+  if (searchTimer !== undefined) clearTimeout(searchTimer);
+  searchTimer = undefined;
+  searchInput.value = '';
+  state.search = '';
+  vscode.setState(state);
+  runSearch(false);
+}
+
+searchInput.addEventListener('input', searchTyped);
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    // Escape here clears the search only; it does not go up a level.
+    e.preventDefault();
+    e.stopPropagation();
+    if (searchInput.value !== '') clearSearch();
+    else searchInput.blur();
+  } else if (e.key === 'ArrowDown') {
+    // The results of what is typed now, not of the last debounced query.
+    if (searchTimer !== undefined) {
+      clearTimeout(searchTimer);
+      searchTimer = undefined;
+      runSearch(true);
+    }
+    if (panel.focusFirstSearchResult()) e.preventDefault();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchTimer = undefined;
+    runSearch(true);
+  }
+});
+// The clear button of a search field.
+searchInput.addEventListener('search', () => {
+  if (searchInput.value === '') clearSearch();
+});
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      e.stopPropagation();
+      searchInput.focus();
+      searchInput.select();
+    }
+  },
+  true,
+);
 
 /**
  * A row of the Trace tab was clicked. Its element belongs to the chosen
@@ -405,14 +707,7 @@ function revealElement(id: string): void {
  */
 function revealTraceTarget(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void {
   if (!current) return;
-  const want = [current.path[0].id, ...target.subProcessLevels];
-  if (pathKey(currentPath()) === pathKey(want)) {
-    revealElement(target.id);
-    return;
-  }
-  pendingReveal = { id: target.id, path: want };
-  setControlsEnabled(false);
-  vscode.postMessage({ type: 'openCallee', calleeId: want[want.length - 1], path: want.slice(0, -1) });
+  goTo({ type: 'showLevel', processId: current.rootProcessId, below: target.subProcessLevels }, target.id, false);
 }
 
 /** The Trace button: a badge of the missing items (as the tab counts them), the description in its tooltip. */
@@ -467,9 +762,15 @@ function showProcessChoices(msg: RenderMessage): void {
   title.hidden = many;
   clear(processSelect);
   if (!many) return;
+  // A service shown on its own is not a process of the picker: it is named on top; picking a process leaves it.
+  if (msg.serviceRoot) {
+    const option = h('option', { value: '', disabled: '' }, `Service: ${msg.path[0].name}`);
+    option.selected = true;
+    processSelect.append(option);
+  }
   for (const p of msg.processes) {
     const option = h('option', { value: p.id }, p.name);
-    option.selected = p.id === msg.rootProcessId;
+    option.selected = !msg.serviceRoot && p.id === msg.rootProcessId;
     processSelect.append(option);
   }
   processSelect.title = `Process to show (${msg.processes.length} in ${msg.process.sourceFile})`;
@@ -510,21 +811,42 @@ function goToLevel(index: number): void {
 }
 
 function goBack(): void {
-  goToLevel(currentPath().length - 2);
+  if (currentPath().length < 2 && current?.serviceRoot) leaveServiceRoot();
+  else goToLevel(currentPath().length - 2);
+}
+
+/** From a service shown on its own back to the chosen process. */
+function leaveServiceRoot(): void {
+  if (!current) return;
+  setControlsEnabled(false);
+  vscode.postMessage({ type: 'selectProcess', processId: current.rootProcessId });
+}
+
+/** True when there is a level to go back to: one above, or the chosen process above a service shown on its own. */
+function canGoBack(): boolean {
+  return currentPath().length > 1 || current?.serviceRoot === true;
 }
 
 function showCrumbs(msg: RenderMessage): void {
-  crumbs.hidden = msg.path.length < 2 && !msg.note;
-  backButton.hidden = msg.path.length < 2;
+  const serviceRoot = msg.serviceRoot === true;
+  crumbs.hidden = msg.path.length < 2 && !msg.note && !serviceRoot;
+  backButton.hidden = msg.path.length < 2 && !serviceRoot;
   clear(crumbList);
+  if (serviceRoot) {
+    // "<file> › Service: X": the file leads back to the chosen process.
+    const file = h('button', { class: 'link', type: 'button', title: 'Back to the chosen process' }, msg.process.sourceFile);
+    file.addEventListener('click', leaveServiceRoot);
+    crumbList.append(h('li', {}, file));
+  }
   msg.path.forEach((level, index) => {
     const last = index === msg.path.length - 1;
     const tooltip = `${level.kind}: ${level.name}`;
+    const text = serviceRoot && index === 0 ? `Service: ${level.name}` : level.name;
     if (last) {
-      crumbList.append(h('li', { 'aria-current': 'page', title: tooltip }, level.name));
+      crumbList.append(h('li', { 'aria-current': 'page', title: tooltip }, text));
       return;
     }
-    const link = h('button', { class: 'link', type: 'button', title: `Back to ${tooltip}` }, level.name);
+    const link = h('button', { class: 'link', type: 'button', title: `Back to ${tooltip}` }, text);
     link.addEventListener('click', () => goToLevel(index));
     crumbList.append(h('li', {}, link));
   });
@@ -582,7 +904,7 @@ document.addEventListener('keydown', (e) => {
     exportMenu.close(true);
   } else if (traceMenu.isOpen) {
     traceMenu.close(true);
-  } else if (currentPath().length > 1) {
+  } else if (canGoBack()) {
     if (!backButton.disabled) goBack();
   } else {
     viewer.get<Selection>('selection').select(null);
@@ -655,6 +977,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     showBanner(msg);
   } else if (msg?.type === 'descriptionStatus' && typeof msg.exists === 'boolean') {
     showDescriptionStatus(msg);
+  } else if (msg?.type === 'searchResult' && typeof msg.requestId === 'number') {
+    showSearchResult(msg.requestId, msg.result);
   } else if (msg?.type === 'exportSource' && (msg.format === 'svg' || msg.format === 'png')) {
     void exportImage(msg);
   }

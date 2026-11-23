@@ -24,6 +24,20 @@ import type {
   VariableDetails,
 } from '../src/views/protocol';
 import type { DataType } from '../src/model/model';
+import {
+  matchesSummary,
+  SCRIPTS_NOT_SEARCHED,
+  TOOLKITS_NOT_SEARCHED,
+  truncatedNote,
+  type SearchCaller,
+  type SearchHit,
+  type SearchObject,
+  type SearchResult,
+  type SearchResultGroup,
+  type SearchResultObject,
+  type SearchScope,
+  type SearchTarget,
+} from '../src/search/search';
 import type { TraceRow, TraceTarget } from '../src/trace/trace';
 import { clear, h } from './dom';
 import {
@@ -45,10 +59,17 @@ import {
   TRACE_STATUS_LABELS,
   traceDetail,
   traceGroups,
+  calledByText,
+  callerWhere,
+  groupIcon,
+  objectIcon,
+  pillCategory,
+  searchTabTitle,
   traceTabTitle,
 } from './panelText';
+import { icon } from './icons';
 
-export const TAB_IDS = ['details', 'data', 'warnings', 'changes', 'trace'] as const;
+export const TAB_IDS = ['details', 'data', 'warnings', 'changes', 'trace', 'search'] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 /** True for a known tab id; a saved webview state may hold anything. */
@@ -66,7 +87,18 @@ export interface ChangesActions {
   revealTrace(target: Extract<TraceTarget, { type: 'node' | 'flow' }>): void;
   /** Stop checking against the description. */
   clearDescription(): void;
+  /** Go where a search match is (another process, a service, a sub-process level, the Data tab). */
+  revealSearch(object: SearchObject, target: SearchResultGroup['group']['target'], dataField?: string): void;
+  /** Select an activity or step that calls a service or linked process, where it is drawn. */
+  showCaller(caller: SearchCaller): void;
+  /** Arrow up from the first search result: back to the search box. */
+  focusSearchBox(): void;
+  /** The All file / Shown process choice changed. */
+  searchScopeChanged(scope: SearchScope): void;
 }
+
+/** Objects of a search result shown open; the rest start folded. */
+export const OPEN_SEARCH_OBJECTS = 10;
 
 /** Types that have a row in the Data tab, and how to show one there. */
 interface RevealType {
@@ -92,6 +124,15 @@ export class SidePanel {
   private active: TabId = 'details';
   private data: RenderMessage | undefined;
   private selectedId: string | undefined;
+  private readonly scopeSelect: HTMLSelectElement;
+  /** The scroll box of the tab bodies, shared by every tab. */
+  private readonly scroller: HTMLElement;
+  /** Where each tab was scrolled to when it was left. */
+  private readonly tabScroll = new Map<TabId, number>();
+  /** The Search row last gone to (data-nav-key); kept over rebuilds of the list. */
+  private searchActive: string | undefined;
+  /** Objects whose Callers list is open (by object key); kept over rebuilds of the list. */
+  private readonly callersOpen = new Set<string>();
 
   constructor(
     private readonly onTabChange: (tab: TabId) => void,
@@ -100,15 +141,27 @@ export class SidePanel {
     private readonly changes: ChangesActions,
     /** The tab shown first, e.g. the one saved before the webview was hidden; not reported to onTabChange. */
     initialTab: TabId = 'details',
+    /** The All file / Shown process choice the Search tab starts with. */
+    searchScope: SearchScope = 'file',
   ) {
+    this.scopeSelect = h(
+      'select',
+      { class: 'search-scope', title: 'What the search looks at', 'aria-label': 'What the search looks at' },
+      h('option', { value: 'file' }, 'All file'),
+      h('option', { value: 'shown' }, 'Shown process'),
+    );
+    this.scopeSelect.value = searchScope;
+    this.scopeSelect.addEventListener('change', () => this.changes.searchScopeChanged(this.searchScope));
     const tabBar = h('div', { class: 'tabs', role: 'tablist' });
     const bodies = h('div', { class: 'tab-bodies' });
+    this.scroller = bodies;
     for (const [id, label] of [
       ['details', 'Details'],
       ['data', 'Data'],
       ['warnings', 'Warnings'],
       ['changes', 'Changes'],
       ['trace', 'Trace'],
+      ['search', 'Search'],
     ] as Array<[TabId, string]>) {
       const button = h('button', { class: 'tab', role: 'tab', type: 'button', id: `tab-${id}` }, label);
       button.addEventListener('click', () => this.showTab(id));
@@ -119,6 +172,9 @@ export class SidePanel {
     }
     // Shown once a render carries a description check.
     this.tabs.get('trace')!.button.hidden = true;
+    // Shown while there is a search.
+    this.tabs.get('search')!.button.hidden = true;
+    this.tabs.get('search')!.body.addEventListener('keydown', (e) => this.onSearchKey(e));
     this.element = h('aside', { class: 'panel' }, tabBar, bodies);
     this.applyTab(initialTab);
   }
@@ -134,6 +190,8 @@ export class SidePanel {
   }
 
   private applyTab(id: TabId): void {
+    // The tabs share one scroll box: each comes back where it was left.
+    if (id !== this.active) this.tabScroll.set(this.active, this.scroller.scrollTop);
     this.active = id;
     for (const [tabId, { button, body }] of this.tabs) {
       const on = tabId === id;
@@ -141,6 +199,7 @@ export class SidePanel {
       button.setAttribute('aria-selected', String(on));
       body.hidden = !on;
     }
+    this.scroller.scrollTop = this.tabScroll.get(id) ?? 0;
   }
 
   /**
@@ -177,9 +236,245 @@ export class SidePanel {
     body.append(details ? renderElement(details, ctx) : renderProcess(this.data.process, types));
   }
 
-  private revealType(name: string): void {
+  /** Shows a business object in the Data tab, and one of its fields when given. */
+  showType(name: string, field?: string): void {
+    this.revealType(name, field);
+  }
+
+  /** What the search looks at, as chosen in the Search tab. */
+  get searchScope(): SearchScope {
+    return this.scopeSelect.value === 'shown' ? 'shown' : 'file';
+  }
+
+  /** True while the Search tab is there (a search is on). */
+  get searching(): boolean {
+    return !this.tabs.get('search')!.button.hidden;
+  }
+
+  /**
+   * The Search tab: the result of a search of the open file, or no tab at
+   * all when undefined (the search box was cleared). Matches are set as
+   * text, never as HTML. Called only when the query, the scope or the index
+   * changed (never on navigation). A rebuild keeps folded objects and open
+   * Callers lists, keeps the row last gone to where it was on screen when
+   * it is still listed, and else the scroll position for the same query.
+   */
+  setSearch(result: SearchResult | undefined): void {
+    const { button, body } = this.tabs.get('search')!;
+    const folded = new Set(
+      [...body.querySelectorAll<HTMLDetailsElement>('details.search-object')].filter((d) => !d.open).map((d) => d.dataset.key ?? ''),
+    );
+    const sameQuery = result !== undefined && body.dataset.query === result.query && body.dataset.scope === result.scope;
+    const shown = this.active === 'search';
+    const scrollTop = shown ? this.scroller.scrollTop : (this.tabScroll.get('search') ?? 0);
+    const activeBefore = shown ? this.activeElement() : null;
+    const activeOffset = activeBefore ? activeBefore.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top : undefined;
+
+    button.hidden = result === undefined;
+    clear(body);
+    if (!result) {
+      delete body.dataset.query;
+      this.searchActive = undefined;
+      this.tabScroll.set('search', 0);
+      if (this.active === 'search') this.showTab('details');
+      return;
+    }
+    body.dataset.query = result.query;
+    body.dataset.scope = result.scope;
+    button.textContent = searchTabTitle(result);
+    const top = h('div', { class: 'search-top' });
+    if (!result.tooShort && result.objects.length > 0) top.append(h('span', { class: 'search-summary' }, matchesSummary(result)), h('span', { class: 'muted', 'aria-hidden': 'true' }, '·'));
+    top.append(this.scopeSelect);
+    body.append(top);
+    const notes = [
+      result.scriptsOmitted > 0 ? SCRIPTS_NOT_SEARCHED : undefined,
+      truncatedNote(result),
+      result.toolkitsNotSearched ? TOOLKITS_NOT_SEARCHED : undefined,
+    ].filter((n): n is string => n !== undefined);
+    if (notes.length > 0) body.append(h('div', { class: 'search-info', role: 'note' }, ...notes.map((n) => h('p', { class: 'search-note' }, n))));
+    if (result.tooShort) {
+      body.append(h('p', { class: 'empty' }, 'Type at least 2 characters to search.'));
+    } else if (result.objects.length === 0) {
+      body.append(h('p', { class: 'empty search-empty' }, `No matches for "${result.query}"`));
+    } else {
+      result.objects.forEach((o, i) => {
+        const key = objectKey(o.object);
+        const open = sameQuery ? !folded.has(key) : o.shown || i < OPEN_SEARCH_OBJECTS;
+        body.append(this.searchObject(o, key, open));
+      });
+    }
+
+    // Put the list back where it was.
+    const active = this.activeElement();
+    if (active) this.markActive(active);
+    if (!shown) {
+      this.tabScroll.set('search', sameQuery ? scrollTop : 0);
+    } else if (active && activeOffset !== undefined) {
+      this.scroller.scrollTop += active.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top - activeOffset;
+    } else {
+      this.scroller.scrollTop = sameQuery ? scrollTop : 0;
+    }
+  }
+
+  /** The row last gone to loses its mark (the user selected something else on the canvas); the list does not move. */
+  clearSearchActive(): void {
+    this.activeElement()?.classList.remove('active');
+    this.activeElement()?.removeAttribute('aria-current');
+    this.searchActive = undefined;
+  }
+
+  /** Focuses the row last gone to, else the first result (arrow down from the search box); false when there is none. */
+  focusFirstSearchResult(): boolean {
+    const nav = this.searchNav();
+    const active = this.activeElement();
+    const target = active && nav.includes(active) ? active : nav[0];
+    if (!target) return false;
+    if (this.active !== 'search') this.showTab('search');
+    target.focus();
+    return true;
+  }
+
+  private activeElement(): HTMLButtonElement | null {
+    if (this.searchActive === undefined) return null;
+    return this.tabs.get('search')!.body.querySelector<HTMLButtonElement>(`[data-nav-key="${CSS.escape(this.searchActive)}"]`);
+  }
+
+  /** Marks the row gone to, so that it stays visible as the one shown (and keys go on from it). */
+  private markActive(el: HTMLElement): void {
+    const body = this.tabs.get('search')!.body;
+    for (const other of body.querySelectorAll('.search-nav.active')) {
+      other.classList.remove('active');
+      other.removeAttribute('aria-current');
+    }
+    el.classList.add('active');
+    el.setAttribute('aria-current', 'true');
+    this.searchActive = el.dataset.navKey;
+  }
+
+  /** The results that can take the focus: those of folded objects and closed Callers lists are skipped. */
+  private searchNav(): HTMLButtonElement[] {
+    return [...this.tabs.get('search')!.body.querySelectorAll<HTMLButtonElement>('.search-nav')].filter(
+      (b) => b.closest('details:not([open])') === null && b.closest('[hidden]') === null,
+    );
+  }
+
+  /** Arrow up and down move through the results; up from the first goes back to the search box. */
+  private onSearchKey(e: KeyboardEvent): void {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const nav = this.searchNav();
+    const index = nav.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    e.preventDefault();
+    if (e.key === 'ArrowUp' && index === 0) this.changes.focusSearchBox();
+    else nav[Math.min(nav.length - 1, Math.max(0, index + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
+  }
+
+  /** A button of the list that goes somewhere: marked as the row gone to when clicked. */
+  private navButton(key: string, cls: string, title: string, go: () => void, ...children: Array<Node | string | null>): HTMLButtonElement {
+    const b = h('button', { class: `${cls} search-nav`, type: 'button', title, 'data-nav-key': key }, ...children);
+    b.addEventListener('click', () => {
+      this.markActive(b);
+      go();
+    });
+    return b;
+  }
+
+  /**
+   * An object of the file: a sticky head (icon, kind and name, match count,
+   * what calls it), its Callers list, then its groups. Folds.
+   */
+  private searchObject(o: SearchResultObject, key: string, open: boolean): HTMLElement {
+    const { object } = o;
+    const calledBy = calledByText(object);
+    const details = h(
+      'details',
+      { class: `search-object search-${object.kind}${o.shown ? ' shown' : ''}`, 'data-key': key },
+      h(
+        'summary',
+        { title: o.shown ? `${object.label} shown now` : object.label },
+        h('span', { class: 'search-object-line' },
+          icon(objectIcon(object)),
+          h('span', { class: 'search-object-name' }, h('span', { class: 'search-object-kind' }, `${object.label}: `), h('strong', {}, object.name || '(unnamed)')),
+          h('span', { class: 'count-badge', title: `${o.hitCount} ${o.hitCount === 1 ? 'match' : 'matches'}` }, String(o.hitCount)),
+        ),
+        calledBy !== undefined ? h('span', { class: 'search-called-by muted' }, calledBy) : null,
+      ),
+      this.callersList(object, key),
+      ...o.groups.map((g) => this.searchGroup(object, key, g)),
+    );
+    details.open = open;
+    return details;
+  }
+
+  /**
+   * "Callers (n)": a list that opens below the head, one row per activity
+   * or step that calls the object. A row goes there; the list stays open.
+   */
+  private callersList(object: SearchObject, key: string): HTMLElement | null {
+    const callers = object.calledBy ?? [];
+    if (callers.length === 0) return null;
+    const open = this.callersOpen.has(key);
+    const list = h('ul', { class: 'search-callers', ...(open ? {} : { hidden: '' }) });
+    const toggle = h(
+      'button',
+      { class: 'link search-callers-toggle search-nav', type: 'button', 'aria-expanded': String(open), 'data-nav-key': `${key}|callers`, title: 'Show or hide what calls it' },
+      `${open ? '▾' : '▸'} Callers (${callers.length})`,
+    );
+    toggle.addEventListener('click', () => {
+      const now = list.hidden;
+      list.hidden = !now;
+      toggle.setAttribute('aria-expanded', String(now));
+      toggle.textContent = `${now ? '▾' : '▸'} Callers (${callers.length})`;
+      if (now) this.callersOpen.add(key);
+      else this.callersOpen.delete(key);
+    });
+    callers.forEach((c, i) => {
+      const where = callerWhere(c);
+      list.append(
+        h(
+          'li',
+          {},
+          this.navButton(`${key}|caller|${i}`, 'search-caller-row', `Select ${c.name} ${where}`, () => this.changes.showCaller(c),
+            icon(c.via === 'service' ? 'service' : 'process'),
+            h('span', { class: 'search-caller-name' }, c.name),
+            h('span', { class: 'muted' }, ` ${where}`),
+          ),
+        ),
+      );
+    });
+    return h('div', { class: 'search-callers-box' }, toggle, list);
+  }
+
+  /** A group: its element (icon, where it is, name) and one row per hit. */
+  private searchGroup(object: SearchObject, objKey: string, g: SearchResultGroup): HTMLElement {
+    const { group } = g;
+    const key = `${objKey}|${targetKey(group.target)}`;
+    const head = this.navButton(`${key}|head`, 'search-head', `${group.kind} · ${goTitle(object)}`, () => this.changes.revealSearch(object, group.target),
+      icon(groupIcon(group, object), group.kind),
+      group.where.length > 0 ? h('span', { class: 'muted search-where' }, `${group.where.join(' › ')} › `) : null,
+      h('span', { class: 'search-name' }, group.name || '(unnamed)'),
+    );
+    return h(
+      'section',
+      { class: 'search-group', 'data-depth': String(Math.min(group.where.length, 4)) },
+      head,
+      h('ul', { class: 'search-list' }, ...g.hits.map((hit, i) => h('li', { class: 'search-hit' }, this.searchRow(object, group.target, hit, `${key}|${i}`)))),
+    );
+  }
+
+  /** A row: the field as a pill and the text around the match. It goes where the match is (revealSearch). */
+  private searchRow(object: SearchObject, target: SearchTarget, hit: SearchHit, key: string): HTMLButtonElement {
+    return this.navButton(key, 'search-row', goTitle(object), () => this.changes.revealSearch(object, target, hit.dataField),
+      h('span', { class: 'search-pill', 'data-category': pillCategory(hit.label) }, hit.label),
+      h('span', { class: 'search-snippet' }, hit.before, h('mark', {}, hit.match), hit.after),
+    );
+  }
+
+  private revealType(name: string, field?: string): void {
     this.showTab('data');
-    const target = this.tabs.get('data')!.body.querySelector<HTMLElement>(`[data-type-name="${CSS.escape(name)}"]`);
+    const type = this.tabs.get('data')!.body.querySelector<HTMLElement>(`[data-type-name="${CSS.escape(name)}"]`);
+    const row = field !== undefined ? type?.querySelector<HTMLElement>(`[data-field-name="${CSS.escape(field)}"]`) : undefined;
+    const target = row ?? type;
     if (target) {
       target.scrollIntoView({ block: 'start' });
       target.classList.remove('flash');
@@ -199,7 +494,7 @@ export class SidePanel {
       const rows = t.fields.map((f) =>
         h(
           'tr',
-          {},
+          { 'data-field-name': f.name },
           h('td', {}, f.name),
           h('td', { class: 'mono' }, f.type),
           h('td', { class: 'center' }, f.required ? 'yes' : 'no'),
@@ -748,4 +1043,24 @@ function parameters(params: ParameterDetails[], revealType: RevealType): HTMLEle
       return h('li', {}, h('span', {}, p.name), type ? ' : ' : null, type);
     }),
   );
+}
+
+/** Where a click on a search result goes, as a tooltip. */
+function goTitle(object: SearchObject): string {
+  if (object.kind === 'dataType') return 'Show in Data tab';
+  if (object.kind === 'service') {
+    if (!object.openable) return 'This service has no diagram: selects the activity that calls it';
+    return 'Open the service as a diagram and select this element';
+  }
+  return 'Select in the diagram and show its details';
+}
+
+/** A stable key of an object of a search result, to keep its fold and Callers list over rebuilds. */
+function objectKey(o: SearchObject): string {
+  return `${o.kind}:${o.id}`;
+}
+
+function targetKey(t: SearchTarget): string {
+  if (t.type === 'node' || t.type === 'flow') return `${t.type}:${t.id}`;
+  return t.type === 'dataType' ? `dataType:${t.name}` : 'root';
 }

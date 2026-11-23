@@ -299,6 +299,8 @@ describe.skipIf(!REAL)('ViewerSession: live refresh', () => {
         name: (id) => source.name(id),
         openability: (id) => source.openability(id),
         read: (id) => (id === GET_WEATHER ? Promise.resolve(undefined) : source.read(id)),
+        list: () => source.list(),
+        key: (ref) => source.key(ref),
       },
     };
     await v.s.reload();

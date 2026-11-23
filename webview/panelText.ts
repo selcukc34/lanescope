@@ -5,6 +5,7 @@ import type { DiffEntry } from '../src/diff/diff';
 import type { CalleeStepKind } from '../src/model/model';
 import type { CalleeDetails, CalleeStepDetails, DiffView, TraceView } from '../src/views/protocol';
 import type { TraceRow, TraceStatus } from '../src/trace/trace';
+import type { SearchCaller, SearchGroup, SearchObject, SearchResult } from '../src/search/search';
 
 /**
  * A type is a link only when the Data tab has a row for it. System Data
@@ -181,4 +182,84 @@ export function traceTabTitle(trace: Pick<TraceView, 'counts' | 'error'> | undef
 export function notCheckedText(headings: readonly string[]): string {
   if (headings.length === 0) return '';
   return `${headings.length} ${headings.length === 1 ? 'section' : 'sections'} not checked: ${headings.join(', ')}`;
+}
+
+/** "Search (3)": the elements with a listed hit; just "Search" while the query is too short. */
+export function searchTabTitle(result: Pick<SearchResult, 'tooShort' | 'groupCount'>): string {
+  return result.tooShort ? 'Search' : `Search (${result.groupCount})`;
+}
+
+/** The icons of the Search tab (./icons). */
+export type IconKind =
+  | 'process'
+  | 'service'
+  | 'humanService'
+  | 'dataType'
+  | 'task'
+  | 'userTask'
+  | 'scriptTask'
+  | 'callActivity'
+  | 'subProcess'
+  | 'gateway'
+  | 'event'
+  | 'flow'
+  | 'field';
+
+/** The icon of an object of the file. */
+export function objectIcon(o: Pick<SearchObject, 'kind' | 'label'>): IconKind {
+  if (o.kind === 'process') return 'process';
+  if (o.kind === 'dataType') return 'dataType';
+  return /human service/i.test(o.label) ? 'humanService' : 'service';
+}
+
+/** The icon of a result group, by the BPMN kind of its element. */
+export function groupIcon(group: Pick<SearchGroup, 'target' | 'kind'>, object: Pick<SearchObject, 'kind' | 'label'>): IconKind {
+  const t = group.target;
+  if (t.type === 'flow') return 'flow';
+  if (t.type === 'dataType') return 'field';
+  if (t.type === 'root') return objectIcon(object);
+  const kind = group.kind.toLowerCase();
+  if (kind.includes('gateway')) return 'gateway';
+  if (kind.includes('event')) return 'event';
+  if (kind.includes('sub-process')) return 'subProcess';
+  if (kind === 'user task') return 'userTask';
+  if (kind === 'script task') return 'scriptTask';
+  if (kind === 'call activity' || kind === 'service task') return 'callActivity';
+  return 'task';
+}
+
+/** What a field label is about, for the colour-free pill style of the Search tab. */
+export type PillCategory = 'name' | 'documentation' | 'script' | 'condition' | 'mapping' | 'data' | 'setting' | 'call' | 'coach' | 'field';
+
+const SETTING_LABELS = new Set(['Lane', 'Performer', 'Assignment', 'Priority', 'Due date', 'Subject', 'Timer', 'Event', 'Catches']);
+
+export function pillCategory(label: string): PillCategory {
+  if (label === 'Name') return 'name';
+  if (label === 'Documentation') return 'documentation';
+  if (label === 'Script') return 'script';
+  if (label === 'Condition') return 'condition';
+  if (/mapping$/i.test(label)) return 'mapping';
+  if (label === 'Field') return 'field';
+  if (SETTING_LABELS.has(label)) return 'setting';
+  if (label === 'Calls' || label === 'REST service' || label === 'Operation') return 'call';
+  if (label.startsWith('Control') || label === 'Binding') return 'coach';
+  return 'data';
+}
+
+/** "in Process: Order" or "in Service: Price Order": where a caller is. */
+export function callerWhere(c: Pick<SearchCaller, 'via' | 'ownerName'>): string {
+  return `in ${c.via === 'service' ? 'Service' : 'Process'}: ${c.ownerName}`;
+}
+
+/**
+ * "called by Order Process, Service: Price Order": what holds the callers
+ * (the activities are in the Callers list); "not called" for a service
+ * nothing calls; undefined for a process nothing calls.
+ */
+export function calledByText(o: Pick<SearchObject, 'kind' | 'calledBy'>): string | undefined {
+  const callers = o.calledBy;
+  if (callers === undefined || (callers.length === 0 && o.kind !== 'service')) return undefined;
+  if (callers.length === 0) return 'not called';
+  const names = callers.map((c) => (c.via === 'service' ? `Service: ${c.ownerName}` : c.ownerName));
+  return `called by ${[...new Set(names)].join(', ')}`;
 }

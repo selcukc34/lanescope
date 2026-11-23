@@ -50,6 +50,7 @@ The viewer is never the default editor for these file types, so `.zip` and `.bpm
 | **−**, **+**, **Fit** | Zoom out, zoom in, fit the diagram to the window. |
 | **Compare…** | Compares the diagram with another file (see [Comparing versions](#comparing-versions)). |
 | **Trace** ▾ | Checks the process against a description (see [Description traceability](#description-traceability)). **Trace** opens the Trace tab, or asks for a description when none is attached; a badge counts the missing items. **▾** opens **Check Against Description…**, **Open Process Description** (**New Process Description** while `<name>-description.md` is not there yet) and **Clear Description Check**. |
+| **Search…** | Finds a word anywhere in the open file (see [Search](#search)). **Cmd/Ctrl+F** focuses it, **Escape** clears it. |
 | **Export** | Exports the shown diagram to a new file (see [Export](#export)). |
 
 Click a node, flow or lane to select it: the selected element is drawn with a thicker border in the theme's focus colour and a glow (a lane or pool with a dashed border), and the details panel shows it. A row of the Changes or Trace tab selects its element the same way. Exports never show the selection.
@@ -324,11 +325,32 @@ How a description is attached:
 
 The comparison, the warnings and the exports are not affected by the check.
 
+## Search
+
+The **Search…** box in the toolbar lists every place a word appears in the **open file**, in the **Search (N)** tab (N: the elements with a match). It is a plain, case-insensitive substring search of at least 2 characters, run locally: no regular expressions, no AI, no network. The Turkish **İ** and **ı** match **i** and **I**. **Cmd/Ctrl+F** focuses the box, **Escape** clears it.
+
+What is searched:
+
+- **A `.twx` export:** every BPD (with the nodes inside its sub-processes), every service of the app (service flows, client-side human services and the rest, whether a process calls them or not; a service is searched in its diagram, as Lanescope draws it when it is opened), every business object and its fields. Packed toolkits (`toolkits/*.zip`) are not searched; the tab says "Toolkits are not searched."
+- **Bob output (`.bpmn` or `.zip`):** every process in it and every business object of the XSD.
+
+In each of them: node names, documentation, lanes, performers, what a call calls, input and output mappings (parameter and expression, or "not mapped"), user task and timer settings, script code, REST services and operations, coach controls, their types and bindings, flow names and conditions, and variables, inputs and outputs. With `lanescope.showScripts` off, script code is not searched at all and the tab says "Scripts were not searched because lanescope.showScripts is off."
+
+Results are grouped by object (a process, a service, a business object), then by element, names first, then in diagram order; each row shows the field it is in and the text around the match. The object shown now comes first; objects can be folded (more than 10: the first 10 are open). A service, and a process that another one calls (a linked process), says what calls it ("called by Order Process, Service: Price Order", or "not called" for a service) and has a **Callers (n)** list: one row per calling activity or step, "in Process: X" or "in Service: Y". At most 500 matches are listed ("Showing first 500 matches"). **All file** / **Shown process**, next to "N matches in M objects", limits the search to the diagram shown (a process with its sub-processes, or a service) and the services and linked processes it calls, one level down; the choice is kept per editor.
+
+**Reading the results.** Each object has an icon and its kind in front of its name (a box with an arrow for a process, a gear for a service, a person for a client-side human service, a table for a business object), its number of matches on the right, and a thin coloured border on the left from the theme's chart colours: blue for processes, purple for services, green for business objects (the theme's contrast border in high contrast themes). The head of an object stays on top while you scroll through it. Each element has an icon of its BPMN kind (task, user task, script task, call, sub-process, gateway, event, flow, field), with the sub-processes it is in before its name. The field of each match is a small pill (Name, Documentation, Script, Condition, Input mapping, Field, …) and the match is highlighted like a find match in the editor. The row you went to last stays highlighted; selecting something else on the diagram clears it.
+
+A result goes where the word is. A match in a service or a linked process that the shown process calls directly (also from inside its sub-processes) opens it from the shown process, as if you opened the calling activity: the picker stays, the breadcrumb reads "&lt;shown process&gt; › &lt;target&gt;". Otherwise a match in a process selects the element there (Lanescope switches to that process and opens the sub-process it is in when needed), and a match in a service opens the service's diagram below the first activity that calls it, or on its own ("&lt;file&gt; › Service: X") when no process calls it. A row of a **Callers** list goes to that activity or step; the list stays open. A business object match opens the Data tab on the field. Click a row, or press **↓** in the box, then **↑**/**↓** and **Enter**. Going to a result never moves or rebuilds the list: it keeps its scroll position, folds and open Callers lists; it is searched again only when the query, the scope or the file (or `lanescope.showScripts`) changes, and then the row you went to stays in place when it is still listed. The diagram is not marked otherwise.
+
+Revealing an element (a row of the Search, Changes or Trace tab, or the selection brought back when you return to a level) never recentres the diagram: an element already in view stays where it is, and one out of view is moved in by as little as needed, at the same zoom. A newly opened level is fitted to the window first.
+
+The index is built in the extension the first time you search, and again after the file changes or `lanescope.showScripts` does; only the results go to the diagram view. The query runs again after a live refresh or a toggle. Exports are not affected.
+
 ## Settings
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too. Open viewers update when the setting changes. |
+| `lanescope.showScripts` | `true` | When `false`, the details panel shows "Script content hidden by the lanescope.showScripts setting." instead of the code, and script text is not sent to the diagram view at all, in opened services too; [Search](#search) does not search scripts. Open viewers update when the setting changes. |
 | `lanescope.trace.autoDetectDescription` | `true` | Attach `<name>-description.md` or `<name>.md` next to the opened file as the [description](#description-traceability) to check against. Applies to viewers opened after the change. |
 
 ## Privacy
