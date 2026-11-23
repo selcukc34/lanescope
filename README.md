@@ -57,6 +57,20 @@ Click a node, flow or lane to select it: the selected element is drawn with a th
 
 Changing a toggle redraws the diagram and keeps the zoom and the selection. The toggles keep their state across live refresh, the process selector and opened services; the default by input type applies only when the file is first opened.
 
+### Commands
+
+| Command | Where | Effect |
+| --- | --- | --- |
+| **Lanescope: Open** | Command Palette, Explorer context menu | Opens a `.bpmn`, `.zip` or `.twx` file in the viewer. |
+| **Lanescope: Export Diagram…** | Command Palette | Exports the shown diagram to a new file (see [Export](#export)). |
+| **Lanescope: Compare With…** | Command Palette, editor **…** menu | Compares with another file (see [Comparing versions](#comparing-versions)). |
+| **Lanescope: Clear Comparison** | Command Palette | Goes back to comparing with the previous version. |
+| **Lanescope: Check Against Description…** | Command Palette, editor **…** menu, **Trace ▾** | Picks a description and opens the Trace tab (see [Description traceability](#description-traceability)). |
+| **Lanescope: New or Open Process Description** | Command Palette, editor **…** menu, **Trace ▾** | Opens `<name>-description.md` next to the opened file, writing it from the template first when it is not there. |
+| **Lanescope: Clear Description Check** | Command Palette, **Trace ▾** | Stops checking against the description. |
+
+All commands except **Lanescope: Open** are available while a Lanescope viewer is the active editor.
+
 ## Supported inputs
 
 | Input | What is read |
@@ -313,7 +327,7 @@ The summary counts only what the process can answer: "24 of 24 checkable items f
 
 Each node of the process stands for one step at most. Click a row to select its node or flow (opening the sub-process it is in) and show its details; a field row opens the business object in the Data tab. The diagram is not marked. The check covers the process chosen in the toolbar, whatever level is drawn.
 
-How to open it: the **Trace** button in the diagram's toolbar. With no description attached, **Trace** asks for one; once one is attached, it opens the Trace tab, and a badge on it counts the missing items (no badge when nothing is missing). Its tooltip names the description. The **▾** next to it holds the three description commands, which are also in the Command Palette and the editor's **…** menu.
+How to open it: the **Trace** button in the diagram's toolbar. With no description attached, **Trace** asks for one; once one is attached, it opens the Trace tab, and a badge on it counts the missing items (no badge when nothing is missing). Its tooltip names the description. The **▾** next to it holds the three description commands, which are also in the Command Palette (the first two in the editor's **…** menu too).
 
 How a description is attached:
 
@@ -331,7 +345,7 @@ The **Search…** box in the toolbar lists every place a word appears in the **o
 
 What is searched:
 
-- **A `.twx` export:** every BPD (with the nodes inside its sub-processes), every service of the app (service flows, client-side human services and the rest, whether a process calls them or not; a service is searched in its diagram, as Lanescope draws it when it is opened), every business object and its fields. Packed toolkits (`toolkits/*.zip`) are not searched; the tab says "Toolkits are not searched."
+- **A `.twx` export:** every BPD (with the nodes inside its sub-processes), every service of the app (service flows, client-side human services and the rest, whether a process calls them or not; a service is searched in its diagram, as Lanescope draws it when it is opened), every business object and its fields. Packed toolkits (`toolkits/*.zip`) are not searched; the tab says "Toolkits are not searched (toolkit contents cannot be opened in Lanescope yet)."
 - **Bob output (`.bpmn` or `.zip`):** every process in it and every business object of the XSD.
 
 In each of them: node names, documentation, lanes, performers, what a call calls, input and output mappings (parameter and expression, or "not mapped"), user task and timer settings, script code, REST services and operations, coach controls, their types and bindings, flow names and conditions, and variables, inputs and outputs. With `lanescope.showScripts` off, script code is not searched at all and the tab says "Scripts were not searched because lanescope.showScripts is off."
@@ -427,21 +441,21 @@ For manual tests, run `npm run f5:prepare`, then open files from `test/fixtures/
 
 ### How to test live refresh
 
-1. Extract the fixture into the git-ignored output folder:
+1. Make fresh copies of the fixtures and extract one into the git-ignored F5 folder:
 
    ```sh
-   mkdir -p test/output/live
-   unzip -o test/fixtures/bob/order-delivery-process.zip -d test/output/live
+   npm run f5:prepare
+   unzip -o test/fixtures/local/f5/order-delivery-process.zip -d test/fixtures/local/f5/live
    ```
 
-2. Press **F5**. In the Extension Development Host, open this repository folder, then right-click `test/output/live/order-delivery-process.bpmn` and choose **Lanescope: Open**.
+2. Press **F5**. In the Extension Development Host, open this repository folder, then right-click `test/fixtures/local/f5/live/order-delivery-process.bpmn` and choose **Lanescope: Open**.
 3. Zoom in, scroll, and click a task so the side panel shows it.
 4. In a text editor, change the process name (the `name` attribute of `<bpmn:process>`) or a task name, then save. Within a second the diagram redraws, the zoom, scroll position and selection stay, and **Updated hh:mm:ss** changes.
 5. Break the XML (for example, delete a closing `>`) and save. The last good diagram stays and an error banner appears. Undo the change and save: the banner goes away.
 6. Delete the file and re-extract it with the command from step 1. The banner appears while the file is missing, and the diagram comes back after the file is written again.
 7. Close the viewer tab. No further reloads happen (the file watcher is disposed).
 
-All changes go to the copy in `test/output/live/`. The fixture in `test/fixtures/` is never modified.
+All changes go to the copy in `test/fixtures/local/f5/live/`. The committed fixtures in `test/fixtures/bob/` are never modified.
 
 ## License
 
